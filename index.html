@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Rota"/>
+<meta name="theme-color" content="#1a1f2e"/>
+<link rel="manifest" href="./manifest.json"/>
+<link rel="apple-touch-icon" href="./icon-192.png"/>
+<title>Weekly Rota Builder</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Source+Sans+3:wght@300;400;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;background:#0f1117;-webkit-tap-highlight-color:transparent;}
+body{font-family:'Source Sans 3',sans-serif;font-weight:300;color:#e8e0d0;overflow-x:hidden;}
+#app{min-height:100vh;display:flex;flex-direction:column;}
+
+/* Header */
+.hdr{background:linear-gradient(135deg,#1a1f2e,#12161f);border-bottom:1px solid #2a3045;padding:16px 20px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:50;}
+.hdr-icon{width:28px;height:28px;color:#c9a84c;flex-shrink:0;}
+.hdr-title{font-family:'Playfair Display',serif;font-size:1.2rem;font-weight:600;color:#e8e0d0;}
+.hdr-sub{font-size:.65rem;color:#8a8070;letter-spacing:.1em;text-transform:uppercase;}
+.hdr-badge{margin-left:auto;font-size:.68rem;color:#4a6050;background:#1a2a20;border:1px solid #2a4030;border-radius:6px;padding:3px 9px;white-space:nowrap;}
+
+/* Stepper */
+.stepper{display:flex;background:#12161f;border-bottom:1px solid #2a3045;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.stepper::-webkit-scrollbar{display:none;}
+.step{display:flex;align-items:center;gap:6px;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;font-size:.7rem;letter-spacing:.07em;text-transform:uppercase;color:#5a6070;white-space:nowrap;transition:all .2s;}
+.step.active{color:#c9a84c;border-bottom-color:#c9a84c;}
+.step.done{color:#6a9a7a;}
+.step-num{width:17px;height:17px;border-radius:50%;border:1px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:.62rem;font-weight:600;flex-shrink:0;}
+
+/* Content */
+.content{flex:1;max-width:900px;width:100%;margin:0 auto;padding:20px 16px 40px;}
+.sec-title{font-family:'Playfair Display',serif;font-size:1.1rem;color:#c9a84c;margin-bottom:4px;}
+.sec-desc{font-size:.78rem;color:#6a7080;margin-bottom:18px;line-height:1.5;}
+.rule-note{background:#1a1e28;border-left:3px solid #c9a84c;border-radius:0 6px 6px 0;padding:8px 12px;font-size:.73rem;color:#6a7080;margin-bottom:14px;line-height:1.7;}
+
+/* Buttons */
+.btn{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-family:'Source Sans 3',sans-serif;font-size:.8rem;font-weight:600;letter-spacing:.04em;transition:all .15s;-webkit-tap-highlight-color:transparent;}
+.btn-gold{background:#c9a84c;color:#0f1117;}
+.btn-gold:active{background:#b8943a;}
+.btn-outline{background:transparent;border:1px solid #2a3045;color:#8a9090;}
+.btn-outline:active{border-color:#c9a84c;color:#c9a84c;}
+.btn-danger{background:transparent;border:1px solid #5a2020;color:#c05050;padding:4px 9px;font-size:.71rem;}
+.btn-danger:active{background:#3a1515;}
+.btn-sm{padding:5px 11px;font-size:.73rem;}
+.btn-lg{padding:12px 28px;font-size:.86rem;}
+button:disabled{opacity:.4;cursor:not-allowed;}
+.nav-row{display:flex;gap:8px;margin-top:20px;flex-wrap:wrap;align-items:center;}
+
+/* Inputs */
+.add-row{display:flex;gap:8px;margin-bottom:16px;}
+.input{flex:1;background:#1a1f2e;border:1px solid #2a3045;border-radius:8px;padding:10px 13px;color:#e8e0d0;font-family:'Source Sans 3',sans-serif;font-size:.9rem;outline:none;-webkit-appearance:none;}
+.input:focus{border-color:#c9a84c;}
+.input::placeholder{color:#3a4050;}
+select.input{cursor:pointer;}
+
+/* People */
+.people-list{display:flex;flex-direction:column;gap:5px;margin-bottom:20px;}
+.person-chip{display:flex;align-items:center;justify-content:space-between;background:#1a1f2e;border:1px solid #2a3045;border-radius:10px;padding:11px 14px;}
+.person-chip-name{font-family:'Playfair Display',serif;font-size:.9rem;color:#e8e0d0;}
+
+/* Person cards */
+.person-card{background:#1a1f2e;border:1px solid #2a3045;border-radius:12px;margin-bottom:12px;overflow:hidden;}
+.pc-hdr{background:#1e2438;padding:12px 15px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #2a3045;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.pc-name{font-family:'Playfair Display',serif;font-size:.9rem;color:#c9a84c;}
+.pc-meta{font-size:.68rem;color:#4a5060;}
+.pc-body{padding:13px 15px;display:none;}
+.pc-body.open{display:block;}
+.slabel{font-size:.66rem;letter-spacing:.11em;text-transform:uppercase;color:#5a6070;margin-bottom:6px;}
+.day-grid{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:11px;}
+.day-btn{padding:5px 9px;border-radius:20px;border:1px solid #2a3045;background:transparent;font-size:.72rem;font-family:'Source Sans 3',sans-serif;cursor:pointer;color:#5a6070;-webkit-tap-highlight-color:transparent;}
+.day-btn.avail{background:#1e3a2a;border-color:#3a7a5a;color:#7ad0a0;}
+.day-btn.ah{background:#2a2010;border-color:#6a4010;color:#c8a040;}
+.day-btn.off{background:#1a0f0f;border-color:#5a2020;color:#c05050;}
+.job-grid{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;}
+.jtog{padding:4px 9px;border-radius:6px;border:1px solid #2a3045;background:transparent;color:#6a7080;font-size:.7rem;font-family:'Source Sans 3',sans-serif;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.jtog.blocked{background:#3a1515;border-color:#7a2020;color:#e08080;}
+.jtog.learning{background:#1a2a20;border-color:#3a6030;color:#80c880;}
+
+/* Exceptions */
+.exc-box{background:#14181f;border:1px solid #2a3045;border-radius:10px;padding:13px 14px;margin-bottom:14px;}
+.exc-hdr{font-size:.68rem;letter-spacing:.11em;text-transform:uppercase;color:#c9a84c;margin-bottom:9px;}
+.exc-form{display:flex;flex-direction:column;gap:7px;margin-bottom:10px;}
+.exc-form-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.exc-lbl{font-size:.72rem;color:#5a6070;}
+.exc-chips{display:flex;flex-wrap:wrap;gap:5px;}
+.exc-chip{display:flex;align-items:center;gap:5px;background:#1a2030;border:1px solid #2a3560;border-radius:6px;padding:4px 9px;font-size:.73rem;color:#90a0c8;}
+
+/* Banners */
+.banners{display:flex;gap:9px;margin-bottom:14px;flex-wrap:wrap;}
+.banner{flex:1;min-width:145px;background:linear-gradient(135deg,#1e2438,#161c2a);border:1px solid #3a4560;border-radius:10px;padding:11px 14px;}
+.b-lbl{font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:#5a6070;margin-bottom:3px;}
+.b-val{font-family:'Playfair Display',serif;font-size:.88rem;color:#c9a84c;word-break:break-word;}
+.b-sub{font-size:.65rem;color:#3a4050;margin-top:2px;}
+
+/* Tabs */
+.tabs{display:flex;margin-bottom:13px;border-bottom:1px solid #2a3045;}
+.tab{padding:7px 15px;font-size:.73rem;letter-spacing:.06em;text-transform:uppercase;color:#5a6070;cursor:pointer;border-bottom:2px solid transparent;}
+.tab.active{color:#c9a84c;border-bottom-color:#c9a84c;}
+
+/* Rota table */
+.rota-wrap{overflow-x:auto;border-radius:10px;border:1px solid #2a3045;margin-bottom:15px;-webkit-overflow-scrolling:touch;}
+.rota-table{width:100%;border-collapse:collapse;font-size:.75rem;}
+.rota-table th{background:#1a1f2e;color:#c9a84c;font-family:'Playfair Display',serif;font-weight:600;padding:9px 8px;text-align:center;border-bottom:1px solid #2a3045;white-space:nowrap;}
+.rota-table th.jc{text-align:left;min-width:130px;color:#8a9090;font-family:'Source Sans 3',sans-serif;font-size:.68rem;letter-spacing:.05em;}
+.rota-table td{padding:6px 7px;border-bottom:1px solid #1a1e28;text-align:center;vertical-align:middle;}
+.rota-table td.jc{text-align:left;color:#7a8090;font-size:.71rem;}
+.rota-table tr:nth-child(even) td{background:#12151e;}
+.rota-table tr:last-child td{border-bottom:none;}
+.rota-table td.off{background:#0f1117;}
+.rota-table tr.tel-row td{border-top:1px dashed #2a3045;}
+.wdots{color:#c9a84c;font-size:.48rem;margin-right:3px;opacity:.6;}
+.tag{display:inline-block;border-radius:4px;padding:2px 5px;font-size:.68rem;margin:1px;white-space:nowrap;}
+.tag-solo{background:#2a1e30;border:1px solid #5a3060;color:#c090d8;}
+.tag-normal{background:#1e3040;border:1px solid #2a5060;color:#70b0c8;}
+.tag-laundry{background:#1e2a20;border:1px solid #3a6040;color:#80c898;}
+.tag-bread{background:#2a2010;border:1px solid #6a5020;color:#c8a860;}
+.tag-tel{background:#1e2030;border:1px solid #3a3060;color:#9090c8;}
+.tag-appr{background:#1a2820;border:1px solid #3a6030;color:#80c870;font-style:italic;}
+.tag-empty{color:#3a2e28;font-size:.68rem;font-style:italic;}
+.edit-btn{background:#2a3045;border:none;border-radius:3px;color:#c9a84c;font-size:.6rem;padding:2px 5px;cursor:pointer;margin-left:2px;}
+
+/* Edit modal */
+.modal-overlay{position:fixed;inset:0;background:#000a;z-index:200;display:flex;align-items:flex-end;justify-content:center;}
+.modal{background:#1e2438;border-radius:16px 16px 0 0;padding:20px;width:100%;max-width:500px;border-top:1px solid #3a4560;}
+.modal-title{font-family:'Playfair Display',serif;color:#c9a84c;font-size:1rem;margin-bottom:12px;}
+.modal select{width:100%;background:#12151e;border:1px solid #2a3045;border-radius:8px;padding:10px 12px;color:#c0b898;font-family:'Source Sans 3',sans-serif;font-size:.85rem;margin-bottom:12px;outline:none;-webkit-appearance:none;}
+.modal-btns{display:flex;gap:8px;}
+
+/* Person summary */
+.psummary{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:14px;}
+.ps-card{background:#1a1f2e;border:1px solid #2a3045;border-radius:10px;padding:10px 12px;}
+.ps-name{font-family:'Playfair Display',serif;font-size:.82rem;color:#c9a84c;margin-bottom:5px;display:flex;align-items:center;justify-content:space-between;}
+.ps-badges{display:flex;gap:3px;}
+.ps-badge{font-size:.57rem;padding:1px 5px;border-radius:8px;background:#12151e;}
+.ps-bw{color:#c9a84c;border:1px solid #3a3010;}
+.ps-bv{color:#70b0c8;border:1px solid #1a3040;}
+.ps-row{display:flex;justify-content:space-between;align-items:center;font-size:.7rem;padding:2px 0;border-bottom:1px solid #1a1e28;gap:4px;}
+.ps-row:last-child{border-bottom:none;}
+.ps-day{flex-shrink:0;width:24px;color:#5a6070;}
+.ps-jobs{display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end;}
+.ps-none{color:#2a3040;font-style:italic;font-size:.68rem;}
+
+/* Notes */
+.notes-label{font-size:.63rem;letter-spacing:.12em;text-transform:uppercase;color:#3a4050;margin-bottom:5px;margin-top:14px;}
+.notes-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+.notes-col label{display:block;font-size:.62rem;margin-bottom:2px;text-align:center;letter-spacing:.05em;text-transform:uppercase;}
+.notes-col label.fx{color:#c9a84c;}
+.notes-col label.nfx{color:#4a5060;}
+.notes-col textarea{width:100%;background:#1a1f2e;border:1px solid #2a3045;border-radius:5px;color:#c0b898;font-family:'Source Sans 3',sans-serif;font-size:.7rem;padding:5px;resize:none;height:60px;outline:none;}
+.notes-col textarea.hfx{border-color:#3a3020;}
+.notes-col textarea:focus{border-color:#c9a84c;}
+
+/* History */
+.hist-panel{background:#12151e;border:1px solid #2a3045;border-radius:10px;padding:15px 18px;}
+.hist-empty{color:#3a4050;font-size:.8rem;text-align:center;padding:20px;}
+.hist-wk{margin-bottom:14px;border-bottom:1px solid #1e2230;padding-bottom:14px;}
+.hist-wk:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0;}
+.hist-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
+.hist-lbl{font-family:'Playfair Display',serif;font-size:.88rem;color:#c9a84c;}
+.hist-sub{font-size:.66rem;color:#4a5060;}
+.hist-pills{display:flex;flex-wrap:wrap;gap:4px;}
+.hist-pill{font-size:.67rem;background:#1a1f2e;border:1px solid #2a3045;border-radius:4px;padding:2px 6px;color:#8a9090;}
+.hist-pill strong{color:#c0b898;}
+.hist-actions{display:flex;gap:7px;margin-top:12px;align-items:center;}
+.hist-cnt{font-size:.7rem;color:#4a5060;}
+
+.empty-st{text-align:center;padding:32px;color:#3a4050;font-size:.82rem;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="hdr">
+    <svg class="hdr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M12 2v20M2 12h20" stroke-linecap="round"/>
+      <circle cx="12" cy="12" r="10" stroke-opacity="0.3"/>
+    </svg>
+    <div>
+      <div class="hdr-title">Weekly Rota Builder</div>
+      <div class="hdr-sub">Schedule &amp; Assignment Tool</div>
+    </div>
+    <div class="hdr-badge" id="hist-badge" style="display:none"></div>
+  </div>
+  <div class="stepper" id="stepper"></div>
+  <div class="content" id="content"></div>
+</div>
+
+<!-- Edit modal -->
+<div class="modal-overlay" id="modal" style="display:none" onclick="closeModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title" id="modal-title"></div>
+    <select id="modal-select"></select>
+    <div class="modal-btns">
+      <button class="btn btn-gold" onclick="applyEdit()">Save</button>
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Constants ────────────────────────────────────────────────────────────────
+const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const DS   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const JOBS = [
+  {name:"Bell/Server 1",      w:5, days:DAYS},
+  {name:"Server 2",           w:4, days:DAYS},
+  {name:"Water & Dishwasher", w:2, days:DAYS},
+  {name:"Scullery",           w:2, days:DAYS},
+  {name:"Cantor/Psalmist",    w:3, days:DAYS},
+  {name:"Acolyte/Sacristan",  w:3, days:DAYS},
+  {name:"Reader",             w:2, days:DAYS},
+  {name:"Bread",              w:2, days:["Thursday","Friday"]},
+  {name:"Laundry",            w:2, days:["Friday","Saturday","Sunday"]},
+  {name:"Telephone",          w:1, days:DAYS},
+  {name:"Security",           w:3, days:["WEEK"]},
+];
+const SOLO      = new Set(["Bell/Server 1","Server 2","Acolyte/Sacristan","Cantor/Psalmist"]);
+const TEL_GOOD  = new Set(["Reader","Scullery","Bread","Laundry"]);
+const TEL_BAD   = "Water & Dishwasher";
+const CONFLICTS = [["Scullery","Water & Dishwasher"]];
+const FIXED_NOTES = {Monday:"Rubbish",Tuesday:"Recycling",Thursday:"Rubbish"};
+const HK = "rota-history-v2", PK = "rota-people-v2", RK = "rota-current-v2";
+const HW = 4;
+
+// ── State ────────────────────────────────────────────────────────────────────
+let step = 0;
+let people = [];
+let history = [];
+let rota = null;
+let notes = {...FIXED_NOTES};
+let exceptions = [];
+let viewTab = "jobs";
+let editTarget = null; // {day, job}
+const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+function load() {
+  try { const v = localStorage.getItem(PK); if(v) people = JSON.parse(v); } catch(_){}
+  try { const v = localStorage.getItem(HK); if(v) history = JSON.parse(v); } catch(_){}
+  try {
+    const v = localStorage.getItem(RK);
+    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; }
+  } catch(_){}
+  // Ensure all people have apprentice field
+  people = people.map(p=>({...p, apprentice:p.apprentice||[]}));
+}
+function savePeople() { localStorage.setItem(PK, JSON.stringify(people)); }
+function saveHistory() { localStorage.setItem(HK, JSON.stringify(history)); }
+function saveRota() {
+  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes}));
+}
+
+// ── Algorithm ─────────────────────────────────────────────────────────────────
+function buildHistMap() {
+  const map={};
+  history.slice(-HW).forEach((wk,wi)=>{
+    const rec=(wi+1)/HW;
+    Object.entries(wk.assignments||{}).forEach(([name,jobs])=>{
+      if(!map[name])map[name]={};
+      (jobs||[]).forEach(j=>{map[name][j]=(map[name][j]||0)+rec;});
+    });
+  });
+  return map;
+}
+function jobsConflict(a,b){return CONFLICTS.some(p=>p.includes(a)&&p.includes(b));}
+function isReaderExcl(day){return day==="Sunday"||day==="Monday";}
+
+function generateRota(){
+  const histMap=buildHistMap();
+  const availCnt={};
+  people.forEach(p=>{availCnt[p.name]=DAYS.filter(d=>p.availability[d]!==false&&p.availability[d]!=="AH").length||1;});
+  const ww={},wd={};
+  people.forEach(p=>{ww[p.name]=0;wd[p.name]={};});
+  const slots={};
+  people.forEach(p=>{slots[p.name]={};DAYS.forEach(d=>{slots[p.name][d]={main:null,tel:false,extra:[]};});});
+  const breadA={Thursday:null,Friday:null};
+  const res={Security:null,Laundry:[],days:{}};
+  DAYS.forEach(d=>{res.days[d]={};});
+
+  const isAvail=(n,d)=>{const p=people.find(x=>x.name===n);return!!(p&&p.availability[d]!==false);};
+  const isAH=(n,d)=>{const p=people.find(x=>x.name===n);return!!(p&&p.availability[d]==="AH");};
+  const isSolo=(n,d)=>{const m=slots[n][d].main;if(!m)return false;if(SOLO.has(m))return true;if(isReaderExcl(d)&&m==="Reader")return true;return false;};
+  const allToday=(n,d)=>{const s=slots[n][d];const l=[];if(s.main)l.push(s.main);if(s.tel)l.push("Telephone");l.push(...s.extra);return l;};
+  const consecPen=(n,job,d)=>{const i=DAYS.indexOf(d);if(i===0)return 0;const yd=DAYS[i-1];const ys=slots[n][yd];if(ys.main===job||(job==="Telephone"&&ys.tel)||ys.extra.includes(job))return 20;return 0;};
+  const score=(n,job,d)=>{
+    return ww[n]/availCnt[n]+(wd[n][job]||0)*8+((histMap[n]||{})[job]||0)*5+consecPen(n,job,d)+Math.random()*1.5;
+  };
+  const doAssign=(n,d,job,asTel=false)=>{
+    const w=JOBS.find(j=>j.name===job)?.w||1;
+    ww[n]+=w;wd[n][job]=(wd[n][job]||0)+1;
+    if(asTel){slots[n][d].tel=true;}
+    else if(slots[n][d].main===null){slots[n][d].main=job;if(job==="Bread")breadA[d]=n;}
+    else{slots[n][d].extra.push(job);if(job==="Bread")breadA[d]=n;}
+  };
+  const canMain=(n,d,job)=>{
+    if(!isAvail(n,d))return false;
+    const p=people.find(x=>x.name===n);
+    if((p.restrictions||[]).includes(job))return false;
+    if(isSolo(n,d))return false;
+    const ws=SOLO.has(job)||(isReaderExcl(d)&&job==="Reader");
+    if(ws&&(slots[n][d].main!==null||slots[n][d].tel||slots[n][d].extra.length>0))return false;
+    if(allToday(n,d).some(j=>jobsConflict(j,job)))return false;
+    return true;
+  };
+  const canMainDbl=(n,d,job)=>{
+    if(!isAvail(n,d))return false;
+    const p=people.find(x=>x.name===n);
+    if((p.restrictions||[]).includes(job))return false;
+    if(isSolo(n,d))return false;
+    if(SOLO.has(job)||(isReaderExcl(d)&&job==="Reader"))return false;
+    if(allToday(n,d).some(j=>jobsConflict(j,job)))return false;
+    return true;
+  };
+  const canTel=(n,d)=>{
+    if(!isAvail(n,d)||isAH(n,d))return false;
+    const p=people.find(x=>x.name===n);
+    if((p.restrictions||[]).includes("Telephone"))return false;
+    if(slots[n][d].tel||isSolo(n,d))return false;
+    return true;
+  };
+  const pickMain=(job,d,{dbl=false,excl=null}={})=>{
+    let c=people.filter(p=>p.name!==excl&&canMain(p.name,d,job));
+    if(!c.length&&dbl)c=people.filter(p=>p.name!==excl&&canMainDbl(p.name,d,job));
+    if(!c.length)return null;
+    c.sort((a,b)=>score(a.name,job,d)-score(b.name,job,d));
+    doAssign(c[0].name,d,job,false);
+    return c[0].name;
+  };
+  const findTrainer=(appr,job,d)=>{
+    const c=people.filter(p=>{
+      if(p.name===appr||!isAvail(p.name,d))return false;
+      if((p.restrictions||[]).includes(job)||(p.apprentice||[]).includes(job))return false;
+      return true;
+    });
+    if(!c.length)return null;
+    c.sort((a,b)=>ww[a.name]-ww[b.name]);
+    return c[0].name;
+  };
+
+  // 0. Exceptions
+  (exceptions||[]).forEach(ex=>{
+    if(!ex.day||!ex.job||!ex.person||!isAvail(ex.person,ex.day))return;
+    if(ex.job==="Telephone"){if(canTel(ex.person,ex.day))doAssign(ex.person,ex.day,"Telephone",true);}
+    else if(canMain(ex.person,ex.day,ex.job)||canMainDbl(ex.person,ex.day,ex.job))doAssign(ex.person,ex.day,ex.job,false);
+    res.days[ex.day][ex.job]=[ex.person];
+  });
+
+  // 1. Security
+  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Security"));
+  pool.sort((a,b)=>score(a.name,"Security","Monday")-score(b.name,"Security","Monday"));
+  if(pool.length){res.Security=pool[0].name;ww[pool[0].name]+=3;wd[pool[0].name]["Security"]=(wd[pool[0].name]["Security"]||0)+1;}}
+
+  // 2. Laundry
+  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Laundry")&&["Friday","Saturday","Sunday"].some(d=>p.availability[d]!==false));
+  pool.sort((a,b)=>score(a.name,"Laundry","Friday")-score(b.name,"Laundry","Friday"));
+  const couple=pool.slice(0,2).map(p=>p.name);
+  res.Laundry=couple;
+  ["Friday","Saturday","Sunday"].forEach(d=>{
+    if(res.days[d]["Laundry"])return;
+    const t=couple.filter(n=>canMain(n,d,"Laundry"));
+    t.forEach(n=>doAssign(n,d,"Laundry",false));
+    res.days[d]["Laundry"]=t.length?t:["—"];
+  });}
+
+  // 3. Main jobs
+  ["Bell/Server 1","Server 2","Cantor/Psalmist","Acolyte/Sacristan","Reader","Water & Dishwasher","Scullery"].forEach(job=>{
+    DAYS.forEach(d=>{
+      if(res.days[d][job])return;
+      let n=pickMain(job,d);
+      if(!n)n=pickMain(job,d,{dbl:true});
+      if(n){
+        const p=people.find(x=>x.name===n);
+        if((p?.apprentice||[]).includes(job)){
+          const tr=findTrainer(n,job,d);
+          res.days[d][job]=tr?[n,tr]:[n];
+          if(tr)doAssign(tr,d,job,false);
+          return;
+        }
+      }
+      res.days[d][job]=n?[n]:["—"];
+    });
+  });
+
+  // 4. Bread
+  ["Thursday","Friday"].forEach(d=>{
+    if(res.days[d]["Bread"])return;
+    const excl=d==="Friday"?breadA["Thursday"]:null;
+    let n=pickMain("Bread",d,{excl});
+    if(!n)n=pickMain("Bread",d,{dbl:true,excl});
+    res.days[d]["Bread"]=n?[n]:["—"];
+  });
+
+  // 5. Telephone
+  DAYS.forEach(d=>{
+    if(res.days[d]["Telephone"]&&!res.days[d]["Telephone"].includes("—"))return;
+    const tiers=[
+      people.filter(p=>canTel(p.name,d)&&slots[p.name][d].main===null&&!slots[p.name][d].tel),
+      people.filter(p=>canTel(p.name,d)&&TEL_GOOD.has(slots[p.name][d].main)),
+      people.filter(p=>canTel(p.name,d)&&slots[p.name][d].main===TEL_BAD),
+      people.filter(p=>canTel(p.name,d)),
+    ];
+    for(const t of tiers){
+      if(!t.length)continue;
+      t.sort((a,b)=>score(a.name,"Telephone",d)-score(b.name,"Telephone",d));
+      doAssign(t[0].name,d,"Telephone",true);
+      res.days[d]["Telephone"]=[t[0].name];
+      return;
+    }
+    const last=people.filter(p=>isAvail(p.name,d)&&!isSolo(p.name,d)&&!isAH(p.name,d)&&!(people.find(x=>x.name===p.name).restrictions||[]).includes("Telephone"));
+    if(last.length){last.sort((a,b)=>ww[a.name]-ww[b.name]);ww[last[0].name]+=1;slots[last[0].name][d].tel=true;res.days[d]["Telephone"]=[last[0].name];}
+    else res.days[d]["Telephone"]=["—"];
+  });
+
+  return res;
+}
+
+function buildAssignments(r){
+  const m={};
+  if(r.Security){m[r.Security]=[...(m[r.Security]||[]),"Security"];}
+  DAYS.forEach(d=>{Object.entries(r.days[d]||{}).forEach(([job,names])=>{(names||[]).forEach(n=>{if(n==="—")return;m[n]=m[n]||[];if(!m[n].includes(job))m[n].push(job);});});});
+  return m;
+}
+
+function buildPersonView(r){
+  const v={};
+  people.forEach(p=>{v[p.name]={days:{},tw:0,uq:new Set()};DAYS.forEach(d=>{v[p.name].days[d]=[];});});
+  if(!r)return v;
+  DAYS.forEach(d=>{Object.entries(r.days[d]||{}).forEach(([job,names])=>{(names||[]).forEach(n=>{if(n!=="—"&&v[n]){if(!v[n].days[d].includes(job))v[n].days[d].push(job);v[n].tw+=JOBS.find(j=>j.name===job)?.w||1;v[n].uq.add(job);}});});});
+  return v;
+}
+
+function tagClass(job){
+  if(SOLO.has(job))return "tag tag-solo";
+  if(job==="Laundry")return "tag tag-laundry";
+  if(job==="Bread")return "tag tag-bread";
+  if(job==="Telephone")return "tag tag-tel";
+  return "tag tag-normal";
+}
+function tagEl(job,text){return `<span class="${tagClass(job)}">${text}</span>`;}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(){
+  renderStepper();
+  renderContent();
+  renderBadge();
+}
+
+function renderBadge(){
+  const el=document.getElementById("hist-badge");
+  if(history.length>0){el.textContent=`📚 ${history.length} wk`;el.style.display="";}
+  else el.style.display="none";
+}
+
+function renderStepper(){
+  document.getElementById("stepper").innerHTML=STEP_LABELS.map((l,i)=>`
+    <div class="step ${i===step?"active":i<step?"done":""}" onclick="goStep(${i})">
+      <div class="step-num">${i<step?"✓":i+1}</div>${l}
+    </div>`).join("");
+}
+
+function renderContent(){
+  const el=document.getElementById("content");
+  if(step===0) el.innerHTML=renderPeople();
+  else if(step===1) el.innerHTML=renderSettings();
+  else if(step===2) el.innerHTML=renderExceptions();
+  else if(step===3) el.innerHTML=renderRota();
+  else if(step===4) el.innerHTML=renderHistory();
+}
+
+function renderPeople(){
+  return `
+    <div class="sec-title">Who is in the community this week?</div>
+    <div class="sec-desc">People and settings are remembered between sessions.</div>
+    <div class="add-row">
+      <input class="input" id="new-name" placeholder="Enter a name…" onkeydown="if(event.key==='Enter')addPerson()"/>
+      <button class="btn btn-gold" onclick="addPerson()">Add</button>
+    </div>
+    ${people.length===0?'<div class="empty-st">No people yet. Add at least two to continue.</div>':""}
+    <div class="people-list">
+      ${people.map(p=>`
+        <div class="person-chip">
+          <span class="person-chip-name">${p.name}</span>
+          <button class="btn btn-danger" onclick="removePerson('${p.name}')">Remove</button>
+        </div>`).join("")}
+    </div>
+    <div class="nav-row">
+      <button class="btn btn-gold btn-lg" ${people.length<2?"disabled":""} onclick="goStep(1)">Continue →</button>
+    </div>`;
+}
+
+function dayBtnCls(val){return val===true?"day-btn avail":val==="AH"?"day-btn ah":"day-btn off";}
+function dayBtnLbl(val,s){return `${s}${val==="AH"?" AH":""}`;}
+
+function renderSettings(){
+  return `
+    <div class="sec-title">Availability &amp; Jobs</div>
+    <div class="sec-desc">Tap a day to cycle: <span style="color:#7ad0a0">Available</span> → <span style="color:#c8a040">AH (no Tel)</span> → <span style="color:#c05050">Absent</span>. Block jobs or mark as learning.</div>
+    <div class="rule-note">
+      <strong>Solo jobs</strong> (Server 1/2, Acolyte, Cantor, Reader on Sun/Mon): nothing else that day.<br/>
+      <strong>Scullery + Water</strong>: cannot be done by same person same day.<br/>
+      <strong>AH days</strong>: available but no Telephone. <strong>No consecutive repeats</strong> strongly avoided.
+    </div>
+    ${people.map((p,pi)=>`
+      <div class="person-card">
+        <div class="pc-hdr" onclick="toggleCard(${pi})">
+          <span class="pc-name">${p.name}</span>
+          <span class="pc-meta">${DAYS.filter(d=>p.availability[d]!==false).length} days ▾</span>
+        </div>
+        <div class="pc-body" id="pc-${pi}">
+          <div class="slabel">Days (tap to cycle)</div>
+          <div class="day-grid">
+            ${DAYS.map((d,di)=>`<button class="${dayBtnCls(p.availability[d])}" onclick="cycleAvail('${p.name}','${d}')">${dayBtnLbl(p.availability[d],DS[di])}</button>`).join("")}
+          </div>
+          <div class="slabel">Cannot do (tap = blocked)</div>
+          <div class="job-grid">
+            ${JOBS.map(j=>`<button class="jtog ${(p.restrictions||[]).includes(j.name)?"blocked":""}" onclick="toggleRestr('${p.name}','${j.name}')">${j.name}</button>`).join("")}
+          </div>
+          <div class="slabel" style="margin-top:8px">Still learning (tap = apprentice, will be paired)</div>
+          <div class="job-grid">
+            ${JOBS.filter(j=>j.days[0]!=="WEEK").map(j=>`<button class="jtog ${(p.apprentice||[]).includes(j.name)?"learning":""}" onclick="toggleAppr('${p.name}','${j.name}')">${j.name}</button>`).join("")}
+          </div>
+        </div>
+      </div>`).join("")}
+    <div class="nav-row">
+      <button class="btn btn-outline" onclick="goStep(0)">← Back</button>
+      <button class="btn btn-gold btn-lg" onclick="goStep(2)">Continue →</button>
+    </div>`;
+}
+
+function renderExceptions(){
+  const dayOpts=DAYS.map(d=>`<option value="${d}">${d}</option>`).join("");
+  const jobOpts=JOBS.filter(j=>j.days[0]!=="WEEK").map(j=>`<option value="${j.name}">${j.name}</option>`).join("");
+  const pplOpts=`<option value="">— person —</option>`+people.map(p=>`<option value="${p.name}">${p.name}</option>`).join("");
+  return `
+    <div class="sec-title">Weekly Exceptions</div>
+    <div class="sec-desc">Pin specific assignments before generating. These override the algorithm.</div>
+    <div class="exc-box">
+      <div class="exc-hdr">Add an exception</div>
+      <div class="exc-form">
+        <div class="exc-form-row">
+          <span class="exc-lbl">Day:</span>
+          <select class="input" id="exc-day" style="flex:1">${dayOpts}</select>
+        </div>
+        <div class="exc-form-row">
+          <span class="exc-lbl">Job:</span>
+          <select class="input" id="exc-job" style="flex:1">${jobOpts}</select>
+        </div>
+        <div class="exc-form-row">
+          <span class="exc-lbl">Person:</span>
+          <select class="input" id="exc-person" style="flex:1">${pplOpts}</select>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="addException()" style="align-self:flex-start">Add</button>
+      </div>
+      ${exceptions.length>0?`<div class="exc-chips">${exceptions.map((ex,i)=>`
+        <div class="exc-chip">
+          <span><strong>${ex.day}</strong> · ${ex.job} → ${ex.person}</span>
+          <button class="btn btn-danger" style="padding:1px 6px;font-size:.66rem" onclick="removeException(${i})">✕</button>
+        </div>`).join("")}</div>`
+      :`<div style="font-size:.71rem;color:#3a4050;margin-top:6px">No exceptions — all automatic.</div>`}
+    </div>
+    <div class="nav-row">
+      <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
+      <button class="btn btn-gold btn-lg" onclick="doGenerate()">Generate Rota →</button>
+    </div>`;
+}
+
+function renderRota(){
+  if(!rota) return `<div class="empty-st">No rota yet. Go back to generate one.</div>`;
+  const pv=buildPersonView(rota);
+  return `
+    <div class="sec-title">Generated Rota</div>
+    <div class="sec-desc">Tap ✎ on any cell to edit manually.${exceptions.length>0?` · ${exceptions.length} exception${exceptions.length>1?"s":""} applied.`:""}</div>
+    <div class="banners">
+      <div class="banner">
+        <div class="b-lbl">Security — whole week</div>
+        <div class="b-val">${rota.Security||"—"}</div>
+        <div class="b-sub">Lights off &amp; doors locked</div>
+      </div>
+      <div class="banner">
+        <div class="b-lbl">Laundry — Fri to Sun</div>
+        <div class="b-val">${rota.Laundry.join(" &amp; ")||"—"}</div>
+        <div class="b-sub">Fixed pair all week</div>
+      </div>
+    </div>
+    <div class="tabs">
+      <div class="tab ${viewTab==="jobs"?"active":""}" onclick="switchTab('jobs')">By Job</div>
+      <div class="tab ${viewTab==="people"?"active":""}" onclick="switchTab('people')">By Person</div>
+    </div>
+    ${viewTab==="jobs"?renderRotaTable():""}
+    ${viewTab==="people"?renderPersonView(pv):""}
+    <div class="notes-label">Daily Notes / Events</div>
+    <div class="notes-grid">
+      ${DAYS.map((d,i)=>`
+        <div class="notes-col">
+          <label class="${FIXED_NOTES[d]?"fx":"nfx"}">${DS[i]}${FIXED_NOTES[d]?" ★":""}</label>
+          <textarea class="${FIXED_NOTES[d]?"hfx":""}" onchange="setNote('${d}',this.value)">${notes[d]||""}</textarea>
+        </div>`).join("")}
+    </div>
+    <div class="nav-row">
+      <button class="btn btn-outline" onclick="goStep(2)">← Edit</button>
+      <button class="btn btn-gold" onclick="doGenerate()">↺ Regen</button>
+      <button class="btn btn-gold" onclick="saveToHistory()">💾 Save</button>
+      <button class="btn btn-outline" onclick="doPrint()">🖨 Print</button>
+      <button class="btn btn-outline btn-sm" onclick="goStep(4)">History →</button>
+    </div>`;
+}
+
+function renderRotaTable(){
+  const rows=JOBS.filter(j=>!["Security","Laundry"].includes(j.name)&&j.days[0]!=="WEEK").map(job=>{
+    const cells=DAYS.map((day,di)=>{
+      if(!job.days.includes(day)) return `<td class="off"><span style="color:#1a1d24">·</span></td>`;
+      const names=(rota.days[day]||{})[job.name]?.filter(x=>x!=="—")||[];
+      let inner="";
+      if(names.length===2) inner=`<span class="tag tag-appr">${names[0]} / ${names[1]}</span>`;
+      else if(names.length) inner=names.map(n=>tagEl(job.name,n)).join("");
+      else inner=`<span class="tag-empty">—</span>`;
+      return `<td>${inner} <button class="edit-btn" onclick="openEdit('${day}','${job.name}')">✎</button></td>`;
+    }).join("");
+    return `<tr class="${job.name==="Telephone"?"tel-row":""}">
+      <td class="jc"><span class="wdots">${"●".repeat(job.w)}</span>${job.name}</td>
+      ${cells}</tr>`;
+  }).join("");
+  return `<div class="rota-wrap"><table class="rota-table">
+    <thead><tr><th class="jc">Job</th>${DS.map(d=>`<th>${d}</th>`).join("")}</tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
+function renderPersonView(pv){
+  return `<div class="psummary">${people.map(p=>{
+    const pd=pv[p.name]||{days:{},tw:0,uq:new Set()};
+    const rows=DAYS.filter(d=>p.availability[d]!==false).map(d=>{
+      const jobs=pd.days[d]||[];
+      return `<div class="ps-row">
+        <span class="ps-day">${d.slice(0,3)}${p.availability[d]==="AH"?" ☀":""}</span>
+        <div class="ps-jobs">${jobs.length?jobs.map(j=>tagEl(j,j)).join(""):`<span class="ps-none">—</span>`}</div>
+      </div>`;
+    }).join("");
+    return `<div class="ps-card">
+      <div class="ps-name">
+        <span>${p.name}${rota?.Security===p.name?" 🔒":""}</span>
+        <div class="ps-badges"><span class="ps-badge ps-bw">W:${pd.tw}</span><span class="ps-badge ps-bv">V:${pd.uq.size}</span></div>
+      </div>
+      ${rows}
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function renderHistory(){
+  const items=[...history].reverse().map((wk,ri)=>{
+    const idx=history.length-1-ri;
+    const pills=Object.entries(wk.assignments||{}).map(([n,jobs])=>`<div class="hist-pill"><strong>${n}:</strong> ${jobs.join(", ")}</div>`).join("");
+    return `<div class="hist-wk">
+      <div class="hist-hdr">
+        <div><div class="hist-lbl">${wk.label}</div>${wk.security?`<div class="hist-sub">Security: ${wk.security} · Laundry: ${(wk.laundry||[]).join(" & ")}</div>`:""}
+        </div>
+        <button class="btn btn-danger" onclick="delHistory(${idx})">Delete</button>
+      </div>
+      <div class="hist-pills">${pills}</div>
+    </div>`;
+  }).join("");
+  return `
+    <div class="sec-title">Rota History</div>
+    <div class="sec-desc">Last ${HW} weeks influence future assignments. Older weeks count less.</div>
+    <div class="hist-panel">${history.length===0?`<div class="hist-empty">No history yet.</div>`:items}</div>
+    <div class="hist-actions">
+      <button class="btn btn-outline" onclick="goStep(3)">← Back</button>
+      ${history.length>0?`<button class="btn btn-danger" onclick="clearHistory()">Clear All</button>`:""}
+      <span class="hist-cnt">${history.length} week${history.length!==1?"s":""} stored</span>
+    </div>`;
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+function goStep(i){ step=i; render(); window.scrollTo(0,0); }
+
+function toggleCard(i){
+  const el=document.getElementById(`pc-${i}`);
+  if(el) el.classList.toggle("open");
+}
+
+function addPerson(){
+  const inp=document.getElementById("new-name");
+  const name=(inp?.value||"").trim();
+  if(!name||people.find(p=>p.name===name)) return;
+  people.push({name,availability:Object.fromEntries(DAYS.map(d=>[d,true])),restrictions:[],apprentice:[]});
+  savePeople(); render();
+}
+function removePerson(name){people=people.filter(p=>p.name!==name);savePeople();render();}
+
+function cycleAvail(name,day){
+  const p=people.find(x=>x.name===name);
+  if(!p)return;
+  const cur=p.availability[day];
+  p.availability[day]=cur===true?"AH":cur==="AH"?false:true;
+  savePeople();render();
+}
+function toggleRestr(name,job){
+  const p=people.find(x=>x.name===name);
+  if(!p)return;
+  const r=p.restrictions||[];
+  p.restrictions=r.includes(job)?r.filter(j=>j!==job):[...r,job];
+  savePeople();render();
+}
+function toggleAppr(name,job){
+  const p=people.find(x=>x.name===name);
+  if(!p)return;
+  const a=p.apprentice||[];
+  p.apprentice=a.includes(job)?a.filter(j=>j!==job):[...a,job];
+  savePeople();render();
+}
+
+function addException(){
+  const day=document.getElementById("exc-day")?.value;
+  const job=document.getElementById("exc-job")?.value;
+  const person=document.getElementById("exc-person")?.value;
+  if(!person)return;
+  exceptions.push({day,job,person});
+  render();
+}
+function removeException(i){exceptions.splice(i,1);render();}
+
+function doGenerate(){
+  rota=generateRota();
+  saveRota();
+  step=3;
+  render();
+  window.scrollTo(0,0);
+}
+
+function switchTab(t){viewTab=t;render();}
+
+function setNote(day,val){notes[day]=val;saveRota();}
+
+// ── Edit modal ─────────────────────────────────────────────────────────────────
+function openEdit(day,job){
+  editTarget={day,job};
+  const cur=((rota?.days[day]||{})[job]||[]).filter(x=>x!=="—")[0]||"";
+  document.getElementById("modal-title").textContent=`${day} · ${job}`;
+  const sel=document.getElementById("modal-select");
+  const avail=people.filter(p=>p.availability[day]!==false);
+  sel.innerHTML=`<option value="">— unassign —</option>`+avail.map(p=>`<option value="${p.name}" ${p.name===cur?"selected":""}>${p.name}</option>`).join("");
+  document.getElementById("modal").style.display="flex";
+}
+function closeModal(){document.getElementById("modal").style.display="none";editTarget=null;}
+function applyEdit(){
+  if(!editTarget||!rota)return;
+  const val=document.getElementById("modal-select").value;
+  rota.days[editTarget.day][editTarget.job]=val?[val]:["—"];
+  saveRota();closeModal();render();
+}
+
+function saveToHistory(){
+  if(!rota)return;
+  const now=new Date();
+  const label=`Week of ${now.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}`;
+  history.push({label,date:now.toISOString(),assignments:buildAssignments(rota),security:rota.Security,laundry:rota.Laundry});
+  saveHistory();
+  alert(`✓ Saved! ${history.length} week${history.length!==1?"s":""} in history.`);
+  renderBadge();
+}
+function delHistory(i){history.splice(i,1);saveHistory();render();}
+function clearHistory(){if(!confirm("Delete all history?"))return;history=[];saveHistory();render();}
+
+function doPrint(){
+  if(!rota)return;
+  const pv=buildPersonView(rota);
+  let t="WEEKLY ROTA\n"+"=".repeat(50)+"\n\n";
+  t+=`SECURITY: ${rota.Security||"—"}   LAUNDRY: ${rota.Laundry.join(" & ")||"—"}\n\n`;
+  DAYS.forEach(d=>{
+    t+=`\n${d.toUpperCase()}${notes[d]?" — "+notes[d]:""}\n`;
+    JOBS.filter(j=>!["Security","Laundry"].includes(j.name)&&j.days[0]!=="WEEK"&&j.days.includes(d)).forEach(j=>{
+      const a=(rota.days[d]||{})[j.name]||[];
+      t+=`  ${j.name}: ${a.filter(x=>x!=="—").join(" / ")||"—"}\n`;
+    });
+  });
+  t+="\n\nBY PERSON:\n"+"-".repeat(40)+"\n";
+  people.forEach(p=>{
+    const pd=pv[p.name]||{days:{},tw:0,uq:new Set()};
+    t+=`\n${p.name} [W:${pd.tw} V:${pd.uq.size}]\n`;
+    DAYS.forEach(d=>{if(p.availability[d]!==false)t+=`  ${d.slice(0,3)}: ${(pd.days[d]||[]).join(" / ")||"—"}\n`;});
+  });
+  const w=window.open("","_blank");
+  w.document.write(`<pre style="font-family:monospace;padding:20px;font-size:13px;line-height:1.5">${t}</pre>`);
+  w.print();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+load();
+// If we have a saved rota, start on the generate tab
+if(rota) step=3;
+render();
+
+// Register service worker
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+}
+</script>
+</body>
+</html>
