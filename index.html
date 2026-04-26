@@ -286,16 +286,33 @@ function generateRota(){
   const isSolo=(n,d)=>{const m=slots[n][d].main;if(!m)return false;if(SOLO.has(m))return true;if(isReaderExcl(d)&&m==="Reader")return true;return false;};
   const allToday=(n,d)=>{const s=slots[n][d];const l=[];if(s.main)l.push(s.main);if(s.tel)l.push("Telephone");l.push(...s.extra);return l;};
   const consecPen=(n,job,d)=>{const i=DAYS.indexOf(d);if(i===0)return 0;const yd=DAYS[i-1];const ys=slots[n][yd];if(ys.main===job||(job==="Telephone"&&ys.tel)||ys.extra.includes(job))return 20;return 0;};
+  // acolyteCount[name] = how many times this person has been Acolyte/Sacristan
+  // OR Reader on Sun/Mon (which counts as equivalent). Hard cap: 2 per week.
+  const acolyteCount={};
+  people.forEach(p=>{acolyteCount[p.name]=0;});
+
+  const MAX_ACOLYTE=2;
+
   const score=(n,job,d)=>{
-    return ww[n]/availCnt[n]+(wd[n][job]||0)*8+((histMap[n]||{})[job]||0)*5+consecPen(n,job,d)+Math.random()*1.5;
+    // Strong variety penalty (×12) to really spread jobs around
+    const weekRep=(wd[n][job]||0)*12;
+    // Extra penalty if this job is Acolyte/Sacristan or Reader-on-excl-day and person is near cap
+    let acolyteCapPen=0;
+    const isAcolyteEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
+    if(isAcolyteEquiv) acolyteCapPen=acolyteCount[n]*15;
+    return ww[n]/availCnt[n]+weekRep+((histMap[n]||{})[job]||0)*5+consecPen(n,job,d)+acolyteCapPen+Math.random()*1.5;
   };
+
   const doAssign=(n,d,job,asTel=false)=>{
     const w=JOBS.find(j=>j.name===job)?.w||1;
     ww[n]+=w;wd[n][job]=(wd[n][job]||0)+1;
+    // Track acolyte-equivalent count
+    if(job==="Acolyte/Sacristan"||(isReaderExcl(d)&&job==="Reader")) acolyteCount[n]++;
     if(asTel){slots[n][d].tel=true;}
     else if(slots[n][d].main===null){slots[n][d].main=job;if(job==="Bread")breadA[d]=n;}
     else{slots[n][d].extra.push(job);if(job==="Bread")breadA[d]=n;}
   };
+
   const canMain=(n,d,job)=>{
     if(!isAvail(n,d))return false;
     const p=people.find(x=>x.name===n);
@@ -304,6 +321,9 @@ function generateRota(){
     const ws=SOLO.has(job)||(isReaderExcl(d)&&job==="Reader");
     if(ws&&(slots[n][d].main!==null||slots[n][d].tel||slots[n][d].extra.length>0))return false;
     if(allToday(n,d).some(j=>jobsConflict(j,job)))return false;
+    // Enforce max 2 acolyte-equivalent per week (hard cap, not just penalty)
+    const isAcolyteEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
+    if(isAcolyteEquiv&&acolyteCount[n]>=MAX_ACOLYTE)return false;
     return true;
   };
   const canMainDbl=(n,d,job)=>{
@@ -322,8 +342,21 @@ function generateRota(){
     if(slots[n][d].tel||isSolo(n,d))return false;
     return true;
   };
-  const pickMain=(job,d,{dbl=false,excl=null}={})=>{
-    let c=people.filter(p=>p.name!==excl&&canMain(p.name,d,job));
+  const pickMain=(job,d,{dbl=false,excl=null,ignoreAcolyteCap=false}={})=>{
+    let c=people.filter(p=>{
+      if(p.name===excl)return false;
+      if(ignoreAcolyteCap){
+        // Use canMain but bypass the acolyte cap
+        if(!isAvail(p.name,d))return false;
+        if((p.restrictions||[]).includes(job))return false;
+        if(isSolo(p.name,d))return false;
+        const ws=SOLO.has(job)||(isReaderExcl(d)&&job==="Reader");
+        if(ws&&(slots[p.name][d].main!==null||slots[p.name][d].tel||slots[p.name][d].extra.length>0))return false;
+        if(allToday(p.name,d).some(j=>jobsConflict(j,job)))return false;
+        return true;
+      }
+      return canMain(p.name,d,job);
+    });
     if(!c.length&&dbl)c=people.filter(p=>p.name!==excl&&canMainDbl(p.name,d,job));
     if(!c.length)return null;
     c.sort((a,b)=>score(a.name,job,d)-score(b.name,job,d));
@@ -366,8 +399,52 @@ function generateRota(){
     res.days[d]["Laundry"]=t.length?t:["—"];
   });}
 
-  // 3. Main jobs
-  ["Bell/Server 1","Server 2","Cantor/Psalmist","Acolyte/Sacristan","Reader","Water & Dishwasher","Scullery"].forEach(job=>{
+  // 3. SOLO/exclusive jobs first (most constrained — assign before anything else)
+  // Order: Bell/Server1, Server2, Cantor, Acolyte, then Reader on Sun/Mon specifically
+  // This ensures candidates are still free when these jobs are assigned.
+  const soloJobs=["Bell/Server 1","Server 2","Cantor/Psalmist","Acolyte/Sacristan"];
+  soloJobs.forEach(job=>{
+    DAYS.forEach(d=>{
+      if(res.days[d][job])return;
+      let n=pickMain(job,d);
+      // If no one available within cap, try ignoring cap as last resort
+      if(!n)n=pickMain(job,d,{ignoreAcolyteCap:true});
+      if(!n)n=pickMain(job,d,{dbl:true});
+      if(n){
+        const p=people.find(x=>x.name===n);
+        if((p?.apprentice||[]).includes(job)){
+          const tr=findTrainer(n,job,d);
+          res.days[d][job]=tr?[n,tr]:[n];
+          if(tr)doAssign(tr,d,job,false);
+          return;
+        }
+      }
+      res.days[d][job]=n?[n]:["—"];
+    });
+  });
+
+  // 4. Reader — assign Sun/Mon first (exclusive days), then other days
+  {
+    const readerDaysOrdered=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+    readerDaysOrdered.forEach(d=>{
+      if(res.days[d]["Reader"])return;
+      let n=pickMain("Reader",d);
+      if(!n)n=pickMain("Reader",d,{dbl:true});
+      if(n){
+        const p=people.find(x=>x.name===n);
+        if((p?.apprentice||[]).includes("Reader")){
+          const tr=findTrainer(n,"Reader",d);
+          res.days[d]["Reader"]=tr?[n,tr]:[n];
+          if(tr)doAssign(tr,d,"Reader",false);
+          return;
+        }
+      }
+      res.days[d]["Reader"]=n?[n]:["—"];
+    });
+  }
+
+  // 5. Remaining non-solo main jobs
+  ["Water & Dishwasher","Scullery"].forEach(job=>{
     DAYS.forEach(d=>{
       if(res.days[d][job])return;
       let n=pickMain(job,d);
@@ -385,7 +462,7 @@ function generateRota(){
     });
   });
 
-  // 4. Bread
+  // 6. Bread
   ["Thursday","Friday"].forEach(d=>{
     if(res.days[d]["Bread"])return;
     const excl=d==="Friday"?breadA["Thursday"]:null;
@@ -394,7 +471,7 @@ function generateRota(){
     res.days[d]["Bread"]=n?[n]:["—"];
   });
 
-  // 5. Telephone
+  // 7. Telephone
   DAYS.forEach(d=>{
     if(res.days[d]["Telephone"]&&!res.days[d]["Telephone"].includes("—"))return;
     const tiers=[
