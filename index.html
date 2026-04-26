@@ -506,22 +506,22 @@ function renderSettings(){
     </div>
     ${people.map((p,pi)=>`
       <div class="person-card">
-        <div class="pc-hdr" onclick="toggleCard(${pi})">
+        <div class="pc-hdr" id="pc-hdr-${pi}" onclick="toggleCard(${pi})">
           <span class="pc-name">${p.name}</span>
           <span class="pc-meta">${DAYS.filter(d=>p.availability[d]!==false).length} days ▾</span>
         </div>
-        <div class="pc-body" id="pc-${pi}">
+        <div class="pc-body ${openCards.has(pi)?"open":""}" id="pc-${pi}">
           <div class="slabel">Days (tap to cycle)</div>
           <div class="day-grid">
-            ${DAYS.map((d,di)=>`<button class="${dayBtnCls(p.availability[d])}" onclick="cycleAvail('${p.name}','${d}')">${dayBtnLbl(p.availability[d],DS[di])}</button>`).join("")}
+            ${DAYS.map((d,di)=>`<button class="${dayBtnCls(p.availability[d])}" data-avail="${p.name}|${d}" onclick="cycleAvail('${p.name}','${d}')">${dayBtnLbl(p.availability[d],DS[di])}</button>`).join("")}
           </div>
           <div class="slabel">Cannot do (tap = blocked)</div>
           <div class="job-grid">
-            ${JOBS.map(j=>`<button class="jtog ${(p.restrictions||[]).includes(j.name)?"blocked":""}" onclick="toggleRestr('${p.name}','${j.name}')">${j.name}</button>`).join("")}
+            ${JOBS.map(j=>`<button class="jtog ${(p.restrictions||[]).includes(j.name)?"blocked":""}" data-restr="${p.name}|${j.name}" onclick="toggleRestr('${p.name}','${j.name}')">${j.name}</button>`).join("")}
           </div>
           <div class="slabel" style="margin-top:8px">Still learning (tap = apprentice, will be paired)</div>
           <div class="job-grid">
-            ${JOBS.filter(j=>j.days[0]!=="WEEK").map(j=>`<button class="jtog ${(p.apprentice||[]).includes(j.name)?"learning":""}" onclick="toggleAppr('${p.name}','${j.name}')">${j.name}</button>`).join("")}
+            ${JOBS.filter(j=>j.days[0]!=="WEEK").map(j=>`<button class="jtog ${(p.apprentice||[]).includes(j.name)?"learning":""}" data-appr="${p.name}|${j.name}" onclick="toggleAppr('${p.name}','${j.name}')">${j.name}</button>`).join("")}
           </div>
         </div>
       </div>`).join("")}
@@ -675,9 +675,13 @@ function renderHistory(){
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
-function goStep(i){ step=i; render(); window.scrollTo(0,0); }
+// Track which person cards are open so they survive re-renders
+const openCards = new Set();
+
+function goStep(i){ step=i; openCards.clear(); render(); window.scrollTo(0,0); }
 
 function toggleCard(i){
+  if(openCards.has(i)) openCards.delete(i); else openCards.add(i);
   const el=document.getElementById(`pc-${i}`);
   if(el) el.classList.toggle("open");
 }
@@ -691,26 +695,46 @@ function addPerson(){
 }
 function removePerson(name){people=people.filter(p=>p.name!==name);savePeople();render();}
 
+// Update a single day button in-place without re-rendering the whole page
 function cycleAvail(name,day){
   const p=people.find(x=>x.name===name);
   if(!p)return;
   const cur=p.availability[day];
   p.availability[day]=cur===true?"AH":cur==="AH"?false:true;
-  savePeople();render();
+  savePeople();
+  // Update just the button that was tapped
+  const btn=document.querySelector(`[data-avail="${name}|${day}"]`);
+  if(btn){
+    const val=p.availability[day];
+    btn.className=dayBtnCls(val);
+    btn.textContent=dayBtnLbl(val, DS[DAYS.indexOf(day)]);
+  }
+  // Update the day-count in the card header
+  const pi=people.indexOf(p);
+  const meta=document.querySelector(`#pc-hdr-${pi} .pc-meta`);
+  if(meta) meta.textContent=`${DAYS.filter(d=>p.availability[d]!==false).length} days ▾`;
 }
+
+// Toggle a restriction button in-place
 function toggleRestr(name,job){
   const p=people.find(x=>x.name===name);
   if(!p)return;
   const r=p.restrictions||[];
   p.restrictions=r.includes(job)?r.filter(j=>j!==job):[...r,job];
-  savePeople();render();
+  savePeople();
+  const btn=document.querySelector(`[data-restr="${name}|${job}"]`);
+  if(btn) btn.className=`jtog ${p.restrictions.includes(job)?"blocked":""}`;
 }
+
+// Toggle an apprentice button in-place
 function toggleAppr(name,job){
   const p=people.find(x=>x.name===name);
   if(!p)return;
   const a=p.apprentice||[];
   p.apprentice=a.includes(job)?a.filter(j=>j!==job):[...a,job];
-  savePeople();render();
+  savePeople();
+  const btn=document.querySelector(`[data-appr="${name}|${job}"]`);
+  if(btn) btn.className=`jtog ${p.apprentice.includes(job)?"learning":""}`;
 }
 
 function addException(){
