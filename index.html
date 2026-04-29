@@ -297,9 +297,16 @@ function generateRota(){
 
   const score=(n,job,d)=>{
     const weekRep=(wd[n][job]||0)*12;
+    // Hard cap: no job more than twice a week (in score terms: third time costs a lot)
+    const hardRepPen=(wd[n][job]||0)>=2?999:0;
     const isAcolyteEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
     const acolytePen=isAcolyteEquiv?acolyteCount[n]*15:0;
-    return ww[n]/availCnt[n]+weekRep+((histMap[n]||{})[job]||0)*5+acolytePen+Math.random()*1.5;
+    // AH penalty: if AH that day and job is Reader or Acolyte, strongly prefer someone else
+    const ahPen=(isAH(n,d)&&(job==="Reader"||job==="Acolyte/Sacristan"||(isReaderExcl(d)&&job==="Reader")))?30:0;
+    // Server group variety: treat Bell/Server1 and Server2 as same group for variety scoring
+    const serverGroupPen=(job==="Server 2"&&(wd[n]["Bell/Server 1"]||0)>0)?8:
+                         (job==="Bell/Server 1"&&(wd[n]["Server 2"]||0)>0)?8:0;
+    return ww[n]/availCnt[n]+weekRep+hardRepPen+((histMap[n]||{})[job]||0)*5+acolytePen+ahPen+serverGroupPen+Math.random()*1.5;
   };
 
   const doAssign=(n,d,job,asTel=false)=>{
@@ -624,19 +631,28 @@ function renderExceptions(){
 function renderRota(){
   if(!rota) return `<div class="empty-st">No rota yet. Go back to generate one.</div>`;
   const pv=buildPersonView(rota);
+  const pplOpts=(sel)=>`<option value="">— none —</option>`+people.map(p=>`<option value="${p.name}" ${p.name===sel?"selected":""}>${p.name}</option>`).join("");
+  const laundryA=rota.Laundry[0]||"";
+  const laundryB=rota.Laundry[1]||"";
   return `
     <div class="sec-title">Generated Rota</div>
     <div class="sec-desc">Tap ✎ on any cell to edit manually.${exceptions.length>0?` · ${exceptions.length} exception${exceptions.length>1?"s":""} applied.`:""}</div>
     <div class="banners">
       <div class="banner">
         <div class="b-lbl">Security — whole week</div>
-        <div class="b-val">${rota.Security||"—"}</div>
+        <select class="input" style="margin-top:4px;background:#12151e;color:#c9a84c;border-color:#3a4560" onchange="rota.Security=this.value;saveRota();renderBadge()">
+          ${pplOpts(rota.Security||"")}
+        </select>
         <div class="b-sub">Lights off &amp; doors locked</div>
       </div>
       <div class="banner">
-        <div class="b-lbl">Laundry — Fri to Sun</div>
-        <div class="b-val">${rota.Laundry.join(" &amp; ")||"—"}</div>
-        <div class="b-sub">Fixed pair all week</div>
+        <div class="b-lbl">Laundry — Fri to Sun (2 people)</div>
+        <select class="input" style="margin-top:4px;background:#12151e;color:#c9a84c;border-color:#3a4560" onchange="rota.Laundry[0]=this.value;saveRota()">
+          ${pplOpts(laundryA)}
+        </select>
+        <select class="input" style="margin-top:4px;background:#12151e;color:#80c898;border-color:#3a6040" onchange="rota.Laundry[1]=this.value;saveRota()">
+          ${pplOpts(laundryB)}
+        </select>
       </div>
     </div>
     <div class="tabs">
@@ -657,7 +673,8 @@ function renderRota(){
       <button class="btn btn-outline" onclick="goStep(2)">← Edit</button>
       <button class="btn btn-gold" onclick="doGenerate()">↺ Regen</button>
       <button class="btn btn-gold" onclick="saveToHistory()">💾 Save</button>
-      <button class="btn btn-outline" onclick="doPrint()">🖨 Print</button>
+      <button class="btn btn-outline" onclick="exportColour()">🎨 Colour Export</button>
+      <button class="btn btn-gold" onclick="exportPrint()">📄 Print Export</button>
       <button class="btn btn-outline btn-sm" onclick="goStep(4)">History →</button>
     </div>`;
 }
@@ -842,27 +859,257 @@ function saveToHistory(){
 function delHistory(i){history.splice(i,1);saveHistory();render();}
 function clearHistory(){if(!confirm("Delete all history?"))return;history=[];saveHistory();render();}
 
-function doPrint(){
+// ── Person colour palette ────────────────────────────────────────────────────
+const PERSON_COLOURS=[
+  "#e74c3c","#e67e22","#f1c40f","#2ecc71","#1abc9c",
+  "#3498db","#9b59b6","#e91e63","#00bcd4","#8bc34a",
+  "#ff5722","#795548","#607d8b","#f06292","#4db6ac",
+];
+function personColour(name){
+  const idx=people.findIndex(p=>p.name===name);
+  return idx>=0?PERSON_COLOURS[idx%PERSON_COLOURS.length]:"#aaa";
+}
+
+// ── Colour export — every name in its own colour ─────────────────────────────
+function exportColour(){
   if(!rota)return;
   const pv=buildPersonView(rota);
-  let t="WEEKLY ROTA\n"+"=".repeat(50)+"\n\n";
-  t+=`SECURITY: ${rota.Security||"—"}   LAUNDRY: ${rota.Laundry.join(" & ")||"—"}\n\n`;
-  DAYS.forEach(d=>{
-    t+=`\n${d.toUpperCase()}${notes[d]?" — "+notes[d]:""}\n`;
-    JOBS.filter(j=>!["Security","Laundry"].includes(j.name)&&j.days[0]!=="WEEK"&&j.days.includes(d)).forEach(j=>{
-      const a=(rota.days[d]||{})[j.name]||[];
-      t+=`  ${j.name}: ${a.filter(x=>x!=="—").join(" / ")||"—"}\n`;
-    });
-  });
-  t+="\n\nBY PERSON:\n"+"-".repeat(40)+"\n";
-  people.forEach(p=>{
-    const pd=pv[p.name]||{days:{},tw:0,uq:new Set()};
-    t+=`\n${p.name} [W:${pd.tw} V:${pd.uq.size}]\n`;
-    DAYS.forEach(d=>{if(p.availability[d]!==false)t+=`  ${d.slice(0,3)}: ${(pd.days[d]||[]).join(" / ")||"—"}\n`;});
-  });
+  // Build a colour legend
+  const legend=people.map(p=>`<span style="display:inline-block;margin:2px 6px;padding:2px 10px;border-radius:4px;background:${personColour(p.name)};color:#fff;font-weight:600;font-size:12px">${p.name}</span>`).join("");
+
+  const jobRows=JOBS.filter(j=>!["Security","Laundry"].includes(j.name)&&j.days[0]!=="WEEK").map(job=>{
+    const cells=DAYS.map(day=>{
+      if(!job.days.includes(day)) return `<td style="background:#f0f0f0"></td>`;
+      const names=(rota.days[day]||{})[job.name]?.filter(x=>x!=="—")||[];
+      const inner=names.length
+        ? names.map(n=>`<span style="display:inline-block;padding:1px 6px;border-radius:3px;background:${personColour(n)};color:#fff;font-weight:700;font-size:11px;margin:1px">${n}</span>`).join(" ")
+        : `<span style="color:#bbb">—</span>`;
+      return `<td style="padding:5px 7px;text-align:center;border:1px solid #ddd;vertical-align:middle">${inner}</td>`;
+    }).join("");
+    return `<tr>
+      <td style="padding:5px 10px;font-weight:600;font-size:12px;color:#444;background:#fafafa;border:1px solid #ddd;white-space:nowrap">
+        ${"●".repeat(job.w)} ${job.name}
+      </td>${cells}</tr>`;
+  }).join("");
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Rota — Colour View</title>
+  <style>body{font-family:Arial,sans-serif;padding:20px;}
+  table{border-collapse:collapse;width:100%;margin-top:12px;}
+  th{background:#1a1f2e;color:#c9a84c;padding:7px 10px;font-size:12px;border:1px solid #2a3045;}
+  tr:nth-child(even) td{background:#f9f9f9;}
+  .sec-hdr{font-size:14px;font-weight:700;margin:16px 0 4px;color:#1a1f2e;}
+  </style></head><body>
+  <h2 style="color:#1a1f2e">Weekly Rota — Colour Check</h2>
+  <div style="margin-bottom:10px">${legend}</div>
+  <div class="sec-hdr">Security: <span style="padding:2px 10px;border-radius:4px;background:${personColour(rota.Security||"")};color:#fff;font-weight:700">${rota.Security||"—"}</span>
+  &nbsp;&nbsp;Laundry (Fri–Sun): ${rota.Laundry.map(n=>`<span style="padding:2px 10px;border-radius:4px;background:${personColour(n)};color:#fff;font-weight:700">${n}</span>`).join(" & ")||"—"}
+  </div>
+  <table>
+    <thead><tr><th style="text-align:left;min-width:150px">Job</th>${DAYS.map(d=>`<th>${d}</th>`).join("")}</tr></thead>
+    <tbody>${jobRows}</tbody>
+  </table>
+  <div class="sec-hdr" style="margin-top:20px">By Person</div>
+  <table>
+    <thead><tr><th style="text-align:left">Person</th>${DAYS.map(d=>`<th>${d.slice(0,3)}</th>`).join("")}<th>W</th><th>V</th></tr></thead>
+    <tbody>${people.map(p=>{
+      const pd=pv[p.name]||{days:{},tw:0,uq:new Set()};
+      const cells=DAYS.map(d=>{
+        if(p.availability[d]===false)return`<td style="background:#eee;border:1px solid #ddd"></td>`;
+        const jobs=pd.days[d]||[];
+        const inner=jobs.map(j=>`<span style="display:inline-block;padding:1px 5px;border-radius:3px;background:${personColour(p.name)};color:#fff;font-size:10px;margin:1px">${j.replace("Bell/Server 1","Srv1").replace("Server 2","Srv2").replace("Water & Dishwasher","Water").replace("Cantor/Psalmist","Cantor").replace("Acolyte/Sacristan","Acol")}</span>`).join(" ")||`<span style="color:#bbb">—</span>`;
+        return`<td style="padding:4px 6px;text-align:center;border:1px solid #ddd;vertical-align:middle">${inner}</td>`;
+      }).join("");
+      return`<tr><td style="padding:4px 10px;font-weight:700;font-size:12px;color:${personColour(p.name)};border:1px solid #ddd">${p.name}</td>${cells}<td style="text-align:center;border:1px solid #ddd;font-size:11px">${pd.tw}</td><td style="text-align:center;border:1px solid #ddd;font-size:11px">${pd.uq.size}</td></tr>`;
+    }).join("")}</tbody>
+  </table>
+  <script>window.print();<\/script></body></html>`;
+
   const w=window.open("","_blank");
-  w.document.write(`<pre style="font-family:monospace;padding:20px;font-size:13px;line-height:1.5">${t}</pre>`);
-  w.print();
+  w.document.write(html);
+  w.document.close();
+}
+
+// ── Print export — replicates the CSV layout exactly ────────────────────────
+function exportPrint(){
+  if(!rota)return;
+
+  // Compute week dates: next Monday
+  const today=new Date();
+  const diff=(1-today.getDay()+7)%7||7;
+  const monday=new Date(today);monday.setDate(today.getDate()+diff);
+  const weekDates=DAYS.map((_,i)=>{const d=new Date(monday);d.setDate(monday.getDate()+i);return d;});
+  const fmt=(d)=>d.getDate();
+  const monthLabel=(d)=>d.toLocaleDateString("en-GB",{month:"long"}).toUpperCase();
+  // e.g. "APRIL-MAY" or "APRIL"
+  const m0=weekDates[0].toLocaleDateString("en-GB",{month:"long"}).toUpperCase();
+  const m6=weekDates[6].toLocaleDateString("en-GB",{month:"long"}).toUpperCase();
+  const monthHdr=m0===m6?m0:`${m0}-${m6.slice(0,3)}`;
+
+  const get=(day,job)=>{
+    const names=(rota.days[day]||{})[job]?.filter(x=>x!=="—")||[];
+    return names.join("/").toUpperCase()||"";
+  };
+  const laundryA=(rota.Laundry[0]||"").toUpperCase();
+  const laundryB=(rota.Laundry[1]||"").toUpperCase();
+  const security=(rota.Security||"").toUpperCase();
+
+  // Column widths: Mon Tue Wed [label col] Thu Fri Sat Sun
+  // Replicate the exact structure: name cols interleaved, label in middle col 7
+  const COL="130px";
+  const LCOL="180px";
+  const th=(t,style="")=>`<th style="padding:6px 8px;border:1px solid #bbb;font-size:11px;font-family:Arial;${style}">${t}</th>`;
+  const td=(t,style="")=>`<td style="padding:6px 8px;border:1px solid #bbb;font-size:11px;font-family:Arial;vertical-align:middle;${style}">${t}</td>`;
+  const tdc=(t,style="")=>td(t,"text-align:center;"+style);
+
+  const nameRow=(job,jobLabel)=>`<tr>
+    ${tdc(get("Monday",job),"font-weight:700")}
+    ${tdc(get("Tuesday",job),"font-weight:700")}
+    ${tdc(get("Wednesday",job),"font-weight:700")}
+    ${td(jobLabel,"font-weight:700;font-size:10px;text-align:center;background:#f0f0f0")}
+    ${tdc(get("Thursday",job),"font-weight:700")}
+    ${tdc(get("Friday",job),"font-weight:700")}
+    ${tdc(get("Saturday",job),"font-weight:700")}
+    ${tdc(get("Sunday",job),"font-weight:700")}
+  </tr><tr>${["Monday","Tuesday","Wednesday","","Thursday","Friday","Saturday","Sunday"].map((_,i)=>i===3?td(""):"<td style='height:4px;border:1px solid #bbb'></td>").join("")}</tr>`;
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Rota</title>
+  <style>
+    @media print{body{margin:0;}}
+    body{font-family:Arial,sans-serif;font-size:11px;padding:10px;}
+    table{border-collapse:collapse;width:100%;}
+    .small{font-size:9.5px;color:#333;margin:4px 0;}
+    .section-note{font-size:10px;color:#555;margin:3px 0 6px 0;font-style:italic;}
+  </style></head><body>
+
+  <table style="margin-bottom:4px">
+    <thead>
+      <tr>
+        ${th(fmt(weekDates[0]),"background:#e8e8e8;width:${COL}")}
+        ${th("")}
+        ${th(fmt(weekDates[1]),"background:#e8e8e8;width:${COL}")}
+        ${th("")}
+        ${th(fmt(weekDates[2]),"background:#e8e8e8;width:${COL}")}
+        ${th("")}
+        ${th(monthHdr,"background:#ddeeff;width:${LCOL}")}
+        ${th("")}
+        ${th("")}
+        ${th(fmt(weekDates[3]),"background:#e8e8e8;width:${COL}")}
+        ${th("")}
+        ${th(fmt(weekDates[4]),"background:#e8e8e8;width:${COL}")}
+        ${th("")}
+        ${th(fmt(weekDates[5]),"background:#e8e8e8;width:${COL}")}
+        ${th("")}
+        ${th(fmt(weekDates[6]),"background:#e8e8e8;width:${COL}")}
+        ${th("")}
+        ${th("")}
+      </tr>
+      <tr>
+        ${th("MONDAY","background:#e8e8e8")}${th("")}
+        ${th("TUESDAY","background:#e8e8e8")}${th("")}
+        ${th("WEDNESDAY","background:#e8e8e8")}${th("")}${th("")}${th("")}${th("")}
+        ${th("THURSDAY","background:#e8e8e8")}${th("")}
+        ${th("FRIDAY","background:#e8e8e8")}${th("")}
+        ${th("SATURDAY","background:#e8e8e8")}${th("")}
+        ${th("SUNDAY","background:#e8e8e8")}${th("")}${th("")}
+      </tr>
+    </thead>
+  </table>
+
+  <!-- Security row -->
+  <table style="margin-bottom:2px"><tr>
+    <td colspan="5" style="padding:4px 8px;font-size:10px;font-weight:700;text-align:center">SECURITY: ${security}</td>
+    <td colspan="3" style="padding:4px 8px;font-size:10px;text-align:center;color:#555">LIGHTS OFF AND DOORS LOCKED</td>
+  </tr></table>
+
+  <!-- Main job table (Mon Tue Wed | LABEL | Thu Fri Sat Sun) -->
+  <table>
+    <colgroup>
+      <col style="width:${COL}"><col style="width:8px">
+      <col style="width:${COL}"><col style="width:8px">
+      <col style="width:${COL}"><col style="width:8px">
+      <col style="width:${LCOL}">
+      <col style="width:${COL}"><col style="width:8px">
+      <col style="width:${COL}"><col style="width:8px">
+      <col style="width:${COL}"><col style="width:8px">
+      <col style="width:${COL}">
+    </colgroup>
+    <tbody>
+      ${nameRow("Bell/Server 1","BELL/SERVER 1")}
+      ${nameRow("Server 2","SERVER 2")}
+      ${nameRow("Water & Dishwasher","WATER &amp; DISHWASHER")}
+      ${nameRow("Scullery","SCULLERY")}
+      <tr><td colspan="14" style="padding:2px 8px;font-size:9px;color:#666;font-style:italic;border:1px solid #ddd">Pause. Listen. Entrust yourselves.</td></tr>
+      ${nameRow("Cantor/Psalmist","CANTOR/PSALMIST")}
+      ${nameRow("Acolyte/Sacristan","ACOLYTE/SACRISTAN")}
+      ${nameRow("Reader","READER")}
+      <!-- Bread row (Thu & Fri only) -->
+      <tr>
+        ${tdc("")}${tdc("")}${tdc("")}
+        ${td("BREAD","font-weight:700;font-size:10px;text-align:center;background:#f0f0f0")}
+        ${tdc(get("Thursday","Bread"),"font-weight:700")}
+        ${tdc(get("Friday","Bread"),"font-weight:700")}
+        ${tdc("")}${tdc("")}
+      </tr>
+      <tr><td colspan="8" style="height:2px;border:1px solid #ddd"></td></tr>
+      <!-- Laundry row (Fri Sat Sun only) -->
+      <tr>
+        ${tdc("")}${tdc("")}${tdc("")}
+        ${td("LAUNDRY","font-weight:700;font-size:10px;text-align:center;background:#f0f0f0")}
+        ${tdc("")}
+        ${tdc(laundryA,"font-weight:700")}
+        ${tdc(laundryA,"font-weight:700")}
+        ${tdc(laundryA,"font-weight:700")}
+      </tr>
+      <tr>
+        ${tdc("")}${tdc("")}${tdc("")}${tdc("")}${tdc("")}
+        ${tdc(laundryB,"font-weight:700")}
+        ${tdc(laundryB,"font-weight:700")}
+        ${tdc(laundryB,"font-weight:700")}
+      </tr>
+      <tr><td colspan="8" style="height:2px;border:1px solid #ddd"></td></tr>
+      ${nameRow("Telephone","TELEPHONE")}
+    </tbody>
+  </table>
+
+  <!-- Fixed notes section -->
+  <div class="small" style="margin-top:8px">Bell has to be rung 10 min before midday prayer, rosary, evening prayer, scrut. And the Eucharist (NEVER in the morning).</div>
+  <div class="small">MORNING PRAYER (Together with the Eucharist on Mon. And Tue.): Monday to Thursday 6:55am: Friday to Saturday 7:30am</div>
+  <div class="small">MIDDAY PR: Mon at 12:45PM, Tue. to Sa.(Rosary) at 13:15; EVENING PR. (Within the Eucharist on Thurs. at 5pm. Too) Mon to Fri at 6:15pm (Could be at 6pm)</div>
+  <div class="small">FRIDAY EUCHARIST IS AT 12:15PM. (Could change)</div>
+
+  <!-- Day-of-week extra info row -->
+  <table style="margin-top:8px">
+    <tr>
+      ${td("")}
+      ${td("MONDAY","font-size:10px;font-weight:700")}${td("")}
+      ${td("TUESDAY","font-size:10px;font-weight:700")}${td("")}
+      ${td("WEDNESDAY","font-size:10px;font-weight:700")}
+      ${td("THURSDAY","font-size:10px;font-weight:700")}${td("")}
+      ${td("FRIDAY","font-size:10px;font-weight:700")}${td("")}
+      ${td("SATURDAY","font-size:10px;font-weight:700")}
+      ${td("")}${td("")}
+      ${td("SUNDAY","font-size:10px;font-weight:700")}
+    </tr>
+    <tr>
+      ${td("")}
+      ${td(notes["Monday"]||"RUBBISH","font-size:10px;font-style:italic")}${td("")}
+      ${td(notes["Tuesday"]||"RECYCLING","font-size:10px;font-style:italic")}${td("")}
+      ${td(notes["Wednesday"]||"","font-size:10px;font-style:italic")}
+      ${td(notes["Thursday"]||"RUBBISH","font-size:10px;font-style:italic")}${td("")}
+      ${td(notes["Friday"]||"","font-size:10px;font-style:italic")}${td("")}
+      ${td(notes["Saturday"]||"","font-size:10px;font-style:italic")}
+      ${td("")}${td("")}
+      ${td(notes["Sunday"]||"","font-size:10px;font-style:italic")}
+    </tr>
+  </table>
+
+  <script>window.print();<\/script>
+  </body></html>`;
+
+  const w=window.open("","_blank");
+  w.document.write(html);
+  w.document.close();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
