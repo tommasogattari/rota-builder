@@ -238,6 +238,8 @@ let editTarget = null; // {day, job}
 const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
 
 // ── Storage ───────────────────────────────────────────────────────────────────
+const SK = "rota-settings-v2"; // separate key for persistent per-person settings
+
 function load() {
   try { const v = localStorage.getItem(PK); if(v) people = JSON.parse(v); } catch(_){}
   try { const v = localStorage.getItem(HK); if(v) history = JSON.parse(v); } catch(_){}
@@ -245,13 +247,50 @@ function load() {
     const v = localStorage.getItem(RK);
     if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; }
   } catch(_){}
-  // Ensure all people have apprentice field
-  people = people.map(p=>({...p, apprentice:p.apprentice||[]}));
+  // Ensure all people have required fields
+  people = people.map(p=>({...p, apprentice:p.apprentice||[], restrictions:p.restrictions||[]}));
 }
 function savePeople() { localStorage.setItem(PK, JSON.stringify(people)); }
 function saveHistory() { localStorage.setItem(HK, JSON.stringify(history)); }
 function saveRota() {
   if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes}));
+}
+
+// Export full state (rota + people + history) as JSON file for import on other devices
+function exportJSON(){
+  const data={people,history,rota,notes,exceptions,version:2};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download=`rota-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Import from a JSON file previously exported
+function importJSON(){
+  const inp=document.createElement("input");
+  inp.type="file";inp.accept=".json";
+  inp.onchange=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const d=JSON.parse(ev.target.result);
+        if(d.people) people=d.people.map(p=>({...p,apprentice:p.apprentice||[],restrictions:p.restrictions||[]}));
+        if(d.history) history=d.history;
+        if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; }
+        if(d.exceptions) exceptions=d.exceptions;
+        savePeople();saveHistory();saveRota();
+        step=rota?3:0;
+        render();
+        alert("✓ Imported successfully!");
+      }catch(err){alert("Import failed: "+err.message);}
+    };
+    reader.readAsText(file);
+  };
+  inp.click();
 }
 
 // ── Algorithm ─────────────────────────────────────────────────────────────────
@@ -534,17 +573,33 @@ function renderContent(){
 function renderPeople(){
   return `
     <div class="sec-title">Who is in the community this week?</div>
-    <div class="sec-desc">People and settings are remembered between sessions.</div>
+    <div class="sec-desc">Type a name and press <strong>Enter</strong> or tap Add. Settings (availability, jobs) are saved per person and remembered next time.</div>
     <div class="add-row">
-      <input class="input" id="new-name" placeholder="Enter a name…" onkeydown="if(event.key==='Enter')addPerson()"/>
-      <button class="btn btn-gold" onclick="addPerson()">Add</button>
+      <input class="input" id="new-name" placeholder="Type name + Enter…"
+        oninput="updateAddBtn()"
+        onkeydown="if(event.key==='Enter'){addPerson();event.preventDefault();}"/>
+      <button class="btn btn-gold" id="add-btn" onclick="addPerson()">Add</button>
     </div>
-    ${people.length===0?'<div class="empty-st">No people yet. Add at least two to continue.</div>':""}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:.78rem;color:${people.length>=2?'#7ad0a0':'#c9a84c'}">
+        ${people.length===0?'No people added yet — add at least 2':
+          people.length===1?'1 person added — add at least 1 more':
+          `<strong style="font-size:1rem">${people.length}</strong> people added ✓`}
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-outline btn-sm" onclick="importJSON()">📥 Import</button>
+        <button class="btn btn-outline btn-sm" onclick="exportJSON()">📤 Export</button>
+      </div>
+    </div>
+    ${people.length===0?'':''}
     <div class="people-list">
-      ${people.map(p=>`
-        <div class="person-chip">
+      ${people.map((p,i)=>`
+        <div class="person-chip" style="border-left:3px solid ${PERSON_COLOURS[i%PERSON_COLOURS.length]}">
           <span class="person-chip-name">${p.name}</span>
-          <button class="btn btn-danger" onclick="removePerson('${p.name}')">Remove</button>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="font-size:.68rem;color:#4a5060">${DAYS.filter(d=>p.availability[d]!==false).length}d · ${(p.restrictions||[]).length} blocked</span>
+            <button class="btn btn-danger" onclick="removePerson('${p.name}')">✕</button>
+          </div>
         </div>`).join("")}
     </div>
     <div class="nav-row">
@@ -744,7 +799,26 @@ function renderHistory(){
     </div>`;
 }
 
-// ── Actions ───────────────────────────────────────────────────────────────────
+// ── Persistent per-person settings ──────────────────────────────────────────
+// Saved separately so settings survive even if someone is temporarily removed
+const SK = "rota-personsettings-v2";
+function loadPersonSettings(){
+  try{const v=localStorage.getItem(SK);return v?JSON.parse(v):{};}catch(_){return {};}
+}
+function savePersonSettings(){
+  const map={};
+  people.forEach(p=>{map[p.name]={availability:p.availability,restrictions:p.restrictions,apprentice:p.apprentice||[]};});
+  localStorage.setItem(SK,JSON.stringify(map));
+}
+function applyPersonSettings(p){
+  const map=loadPersonSettings();
+  if(map[p.name]){
+    return{...p,availability:map[p.name].availability||p.availability,
+               restrictions:map[p.name].restrictions||[],
+               apprentice:map[p.name].apprentice||[]};
+  }
+  return p;
+}
 // Track which person cards are open so they survive re-renders
 const openCards = new Set();
 
@@ -756,57 +830,59 @@ function toggleCard(i){
   if(el) el.classList.toggle("open");
 }
 
+function updateAddBtn(){
+  const inp=document.getElementById("new-name");
+  const btn=document.getElementById("add-btn");
+  if(btn) btn.disabled=!(inp?.value||"").trim();
+}
+
 function addPerson(){
   const inp=document.getElementById("new-name");
   const name=(inp?.value||"").trim();
-  if(!name||people.find(p=>p.name===name)) return;
-  people.push({name,availability:Object.fromEntries(DAYS.map(d=>[d,true])),restrictions:[],apprentice:[]});
-  savePeople(); render();
+  if(!name||people.find(p=>p.name===name)){
+    inp?.focus();return;
+  }
+  let newP={name,availability:Object.fromEntries(DAYS.map(d=>[d,true])),restrictions:[],apprentice:[]};
+  newP=applyPersonSettings(newP); // restore saved settings if this person was here before
+  people.push(newP);
+  savePeople();
+  renderContent();
+  const newInp=document.getElementById("new-name");
+  if(newInp){newInp.value="";newInp.focus();}
+  updateAddBtn();
 }
 function removePerson(name){people=people.filter(p=>p.name!==name);savePeople();render();}
 
-// Update a single day button in-place without re-rendering the whole page
 function cycleAvail(name,day){
   const p=people.find(x=>x.name===name);
   if(!p)return;
   const cur=p.availability[day];
   p.availability[day]=cur===true?"AH":cur==="AH"?false:true;
-  savePeople();
-  // Update just the button that was tapped
+  savePeople();savePersonSettings();
   const btn=document.querySelector(`[data-avail="${name}|${day}"]`);
-  if(btn){
-    const val=p.availability[day];
-    btn.className=dayBtnCls(val);
-    btn.textContent=dayBtnLbl(val, DS[DAYS.indexOf(day)]);
-  }
-  // Update the day-count in the card header
+  if(btn){const val=p.availability[day];btn.className=dayBtnCls(val);btn.textContent=dayBtnLbl(val,DS[DAYS.indexOf(day)]);}
   const pi=people.indexOf(p);
   const meta=document.querySelector(`#pc-hdr-${pi} .pc-meta`);
   if(meta) meta.textContent=`${DAYS.filter(d=>p.availability[d]!==false).length} days ▾`;
 }
-
-// Toggle a restriction button in-place
 function toggleRestr(name,job){
   const p=people.find(x=>x.name===name);
   if(!p)return;
   const r=p.restrictions||[];
   p.restrictions=r.includes(job)?r.filter(j=>j!==job):[...r,job];
-  savePeople();
+  savePeople();savePersonSettings();
   const btn=document.querySelector(`[data-restr="${name}|${job}"]`);
   if(btn) btn.className=`jtog ${p.restrictions.includes(job)?"blocked":""}`;
 }
-
-// Toggle an apprentice button in-place
 function toggleAppr(name,job){
   const p=people.find(x=>x.name===name);
   if(!p)return;
   const a=p.apprentice||[];
   p.apprentice=a.includes(job)?a.filter(j=>j!==job):[...a,job];
-  savePeople();
+  savePeople();savePersonSettings();
   const btn=document.querySelector(`[data-appr="${name}|${job}"]`);
   if(btn) btn.className=`jtog ${p.apprentice.includes(job)?"learning":""}`;
 }
-
 function addException(){
   const day=document.getElementById("exc-day")?.value;
   const job=document.getElementById("exc-job")?.value;
