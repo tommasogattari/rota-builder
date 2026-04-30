@@ -238,7 +238,6 @@ let editTarget = null; // {day, job}
 const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
 
 // ── Storage ───────────────────────────────────────────────────────────────────
-const SK = "rota-settings-v2"; // separate key for persistent per-person settings
 
 function load() {
   try { const v = localStorage.getItem(PK); if(v) people = JSON.parse(v); } catch(_){}
@@ -587,8 +586,8 @@ function renderPeople(){
           `<strong style="font-size:1rem">${people.length}</strong> people added ✓`}
       </div>
       <div style="display:flex;gap:6px">
-        <button class="btn btn-outline btn-sm" onclick="importJSON()">📥 Import</button>
-        <button class="btn btn-outline btn-sm" onclick="exportJSON()">📤 Export</button>
+        <button class="btn btn-outline btn-sm" onclick="importJSON()" title="Restore all data (people, history, rota) from a backup file previously saved from this app">📥 Restore backup</button>
+        <button class="btn btn-outline btn-sm" onclick="exportJSON()" title="Save all data (people, history, rota) to a .json file — useful to transfer to another device">📤 Backup data</button>
       </div>
     </div>
     ${people.length===0?'':''}
@@ -714,6 +713,9 @@ function renderRota(){
       <div class="tab ${viewTab==="jobs"?"active":""}" onclick="switchTab('jobs')">By Job</div>
       <div class="tab ${viewTab==="people"?"active":""}" onclick="switchTab('people')">By Person</div>
     </div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px">
+      ${people.map(p=>`<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:12px;background:${personColour(p.name)};color:#fff;font-size:.72rem;font-weight:600">${p.name}</span>`).join("")}
+    </div>
     ${viewTab==="jobs"?renderRotaTable():""}
     ${viewTab==="people"?renderPersonView(pv):""}
     <div class="notes-label">Daily Notes / Events</div>
@@ -740,9 +742,14 @@ function renderRotaTable(){
       if(!job.days.includes(day)) return `<td class="off"><span style="color:#1a1d24">·</span></td>`;
       const names=(rota.days[day]||{})[job.name]?.filter(x=>x!=="—")||[];
       let inner="";
-      if(names.length===2) inner=`<span class="tag tag-appr">${names[0]} / ${names[1]}</span>`;
-      else if(names.length) inner=names.map(n=>tagEl(job.name,n)).join("");
-      else inner=`<span class="tag-empty">—</span>`;
+      if(names.length===2){
+        // apprentice pair: show both names each in their own colour
+        inner=names.map(n=>`<span style="display:inline-block;padding:2px 7px;border-radius:4px;background:${personColour(n)};color:#fff;font-weight:700;font-size:.72rem;margin:1px">${n}</span>`).join("<span style='color:#888;font-size:.7rem'> / </span>");
+      } else if(names.length){
+        inner=names.map(n=>`<span style="display:inline-block;padding:2px 7px;border-radius:4px;background:${personColour(n)};color:#fff;font-weight:700;font-size:.72rem;margin:1px">${n}</span>`).join("");
+      } else {
+        inner=`<span class="tag-empty">—</span>`;
+      }
       return `<td>${inner} <button class="edit-btn" onclick="openEdit('${day}','${job.name}')">✎</button></td>`;
     }).join("");
     return `<tr class="${job.name==="Telephone"?"tel-row":""}">
@@ -758,15 +765,18 @@ function renderRotaTable(){
 function renderPersonView(pv){
   return `<div class="psummary">${people.map(p=>{
     const pd=pv[p.name]||{days:{},tw:0,uq:new Set()};
+    const col=personColour(p.name);
     const rows=DAYS.filter(d=>p.availability[d]!==false).map(d=>{
       const jobs=pd.days[d]||[];
       return `<div class="ps-row">
         <span class="ps-day">${d.slice(0,3)}${p.availability[d]==="AH"?" ☀":""}</span>
-        <div class="ps-jobs">${jobs.length?jobs.map(j=>tagEl(j,j)).join(""):`<span class="ps-none">—</span>`}</div>
+        <div class="ps-jobs">${jobs.length
+          ? jobs.map(j=>`<span style="display:inline-block;padding:1px 6px;border-radius:3px;background:${col};color:#fff;font-size:.68rem;margin:1px">${j.replace("Bell/Server 1","Srv1").replace("Server 2","Srv2").replace("Water & Dishwasher","Water").replace("Cantor/Psalmist","Cantor").replace("Acolyte/Sacristan","Acolyte")}</span>`).join("")
+          : `<span class="ps-none">—</span>`}</div>
       </div>`;
     }).join("");
-    return `<div class="ps-card">
-      <div class="ps-name">
+    return `<div class="ps-card" style="border-top:3px solid ${col}">
+      <div class="ps-name" style="color:${col}">
         <span>${p.name}${rota?.Security===p.name?" 🔒":""}</span>
         <div class="ps-badges"><span class="ps-badge ps-bw">W:${pd.tw}</span><span class="ps-badge ps-bv">V:${pd.uq.size}</span></div>
       </div>
