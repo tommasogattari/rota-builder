@@ -311,122 +311,168 @@ function isReaderExcl(day){return day==="Sunday"||day==="Monday";}
 
 function generateRota(){
   const histMap=buildHistMap();
+
+  // How many full (non-AH) days each person is available
   const availCnt={};
-  people.forEach(p=>{availCnt[p.name]=DAYS.filter(d=>p.availability[d]!==false&&p.availability[d]!=="AH").length||1;});
-  const ww={},wd={};
+  people.forEach(p=>{availCnt[p.name]=DAYS.filter(d=>p.availability[d]===true).length||1;});
+
+  // Per-week counters
+  const ww={};   // total weight assigned
+  const wd={};   // {job->count} assigned this week
   people.forEach(p=>{ww[p.name]=0;wd[p.name]={};});
-  const slots={};
-  people.forEach(p=>{slots[p.name]={};DAYS.forEach(d=>{slots[p.name][d]={main:null,tel:false,extra:[]};});});
+
+  // Per-day slots: what each person is doing today
+  // dayJobs[name][day] = string[]  (list of jobs, may be >1 only if double-assigned)
+  const dayJobs={};
+  people.forEach(p=>{dayJobs[p.name]={};DAYS.forEach(d=>{dayJobs[p.name][d]=[];});});
+
+  // Acolyte-equivalent counter (Acolyte + Reader Sun/Mon). Hard cap = 2.
+  const acolyteCnt={};
+  people.forEach(p=>{acolyteCnt[p.name]=0;});
+  const MAX_ACOL=2;
+
+  // Hard cap: no job more than 2× per week (except Telephone which can go up to 3)
+  const MAX_JOB=2, MAX_TEL=3;
+  // Server group: Bell/Server1 + Server2 treated as one group, cap 2 total per week
+  // and strongly prefer alternating between them rather than repeating the same one.
+  const serverGroupCount=(n)=>(wd[n]["Bell/Server 1"]||0)+(wd[n]["Server 2"]||0);
+  const MAX_SERVER_GROUP=2;
+
   const breadA={Thursday:null,Friday:null};
   const res={Security:null,Laundry:[],days:{}};
   DAYS.forEach(d=>{res.days[d]={};});
 
+  // ── helpers ──────────────────────────────────────────────────────────────
   const isAvail=(n,d)=>{const p=people.find(x=>x.name===n);return!!(p&&p.availability[d]!==false);};
-  const isAH=(n,d)=>{const p=people.find(x=>x.name===n);return!!(p&&p.availability[d]==="AH");};
-  const isSolo=(n,d)=>{const m=slots[n][d].main;if(!m)return false;if(SOLO.has(m))return true;if(isReaderExcl(d)&&m==="Reader")return true;return false;};
-  const allToday=(n,d)=>{const s=slots[n][d];const l=[];if(s.main)l.push(s.main);if(s.tel)l.push("Telephone");l.push(...s.extra);return l;};
-  const isConsec=(n,job,d)=>{
-    const i=DAYS.indexOf(d);if(i===0)return false;
-    const ys=slots[n][DAYS[i-1]];
-    return ys.main===job||(job==="Telephone"&&ys.tel)||ys.extra.includes(job);
-  };
-  // acolyteCount: Acolyte/Sacristan + Reader on Sun/Mon count together. Cap: 2.
-  const acolyteCount={};
-  people.forEach(p=>{acolyteCount[p.name]=0;});
-  const MAX_ACOLYTE=2;
+  const isAH   =(n,d)=>{const p=people.find(x=>x.name===n);return!!(p&&p.availability[d]==="AH");};
 
-  const score=(n,job,d)=>{
-    const weekRep=(wd[n][job]||0)*12;
-    // Hard cap: no job more than twice a week (in score terms: third time costs a lot)
-    const hardRepPen=(wd[n][job]||0)>=2?999:0;
-    const isAcolyteEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
-    const acolytePen=isAcolyteEquiv?acolyteCount[n]*15:0;
-    // AH penalty: if AH that day and job is Reader or Acolyte, strongly prefer someone else
-    const ahPen=(isAH(n,d)&&(job==="Reader"||job==="Acolyte/Sacristan"||(isReaderExcl(d)&&job==="Reader")))?30:0;
-    // Server group variety: treat Bell/Server1 and Server2 as same group for variety scoring
-    const serverGroupPen=(job==="Server 2"&&(wd[n]["Bell/Server 1"]||0)>0)?8:
-                         (job==="Bell/Server 1"&&(wd[n]["Server 2"]||0)>0)?8:0;
-    return ww[n]/availCnt[n]+weekRep+hardRepPen+((histMap[n]||{})[job]||0)*5+acolytePen+ahPen+serverGroupPen+Math.random()*1.5;
+  // All jobs assigned to person today
+  const todayJobs=(n,d)=>dayJobs[n][d];
+
+  // Does person already have ANY solo-type job today?
+  const hasSoloToday=(n,d)=>todayJobs(n,d).some(j=>SOLO.has(j)||(isReaderExcl(d)&&j==="Reader"));
+
+  // Would assigning `job` today violate the SOLO rule?
+  // Rule: SOLO jobs cannot share a day with ANY other job (for that person)
+  const soloConflict=(n,d,job)=>{
+    const existing=todayJobs(n,d);
+    if(existing.length===0)return false;
+    // new job is solo → already has something → conflict
+    if(SOLO.has(job)||(isReaderExcl(d)&&job==="Reader"))return true;
+    // existing job is solo → cannot add anything
+    if(hasSoloToday(n,d))return true;
+    return false;
   };
 
-  const doAssign=(n,d,job,asTel=false)=>{
-    const w=JOBS.find(j=>j.name===job)?.w||1;
-    ww[n]+=w;wd[n][job]=(wd[n][job]||0)+1;
-    if(job==="Acolyte/Sacristan"||(isReaderExcl(d)&&job==="Reader")) acolyteCount[n]++;
-    if(asTel){slots[n][d].tel=true;}
-    else if(slots[n][d].main===null){slots[n][d].main=job;if(job==="Bread")breadA[d]=n;}
-    else{slots[n][d].extra.push(job);if(job==="Bread")breadA[d]=n;}
-  };
+  // Pairwise job conflicts (Scullery+Water)
+  const pairConflict=(n,d,job)=>todayJobs(n,d).some(j=>jobsConflict(j,job));
 
-  // Jobs that form a "pair" for incompatibility purposes
-  const INCOMPAT_GROUPS=[
-    new Set(["Bell/Server 1","Server 2"]),
-    new Set(["Acolyte/Sacristan","Reader"]),
-  ];
-  // Check if assigning `job` to `n` on `day` would violate an incompatible pair rule
-  const incompatibleViolation=(n,d,job)=>{
+  // Incompatible-pair check
+  const INCOMPAT_GROUPS=[new Set(["Bell/Server 1","Server 2"]),new Set(["Acolyte/Sacristan","Reader"])];
+  const incompatConflict=(n,d,job)=>{
+    const group=INCOMPAT_GROUPS.find(g=>g.has(job));
+    if(!group)return false;
     for(const pair of incompatible){
       const other=pair.personA===n?pair.personB:pair.personB===n?pair.personA:null;
       if(!other)continue;
-      // Check if the other person already has a job in the same group as `job`
-      const group=INCOMPAT_GROUPS.find(g=>g.has(job));
-      if(!group)continue;
-      const otherJobs=allToday(other,d);
-      if(otherJobs.some(j=>group.has(j))) return true;
+      if(todayJobs(other,d).some(j=>group.has(j)))return true;
     }
     return false;
   };
 
-  // Base eligibility (ignoring consecutive and acolyte-cap — callers add those)
-  const eligible=(n,d,job)=>{
+  // Yesterday check
+  const didYesterday=(n,job,d)=>{
+    const i=DAYS.indexOf(d);if(i===0)return false;
+    return dayJobs[n][DAYS[i-1]].includes(job);
+  };
+
+  // Scoring: lower = more deserving
+  const score=(n,job,d)=>{
+    const rep=wd[n][job]||0;
+    const weekRepPen=rep*10;
+    const isAcolEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
+    const acolPen=isAcolEquiv?acolyteCnt[n]*12:0;
+    const ahPen=(isAH(n,d)&&(job==="Reader"||job==="Acolyte/Sacristan"))?25:0;
+    // Server group variety: penalise heavily if already did the SAME server role this week.
+    // Extra penalty if they did the OTHER server role (prefer alternating, not repeating same).
+    let srvPen=0;
+    if(job==="Bell/Server 1"){
+      srvPen=(wd[n]["Bell/Server 1"]||0)*20;  // already did Srv1 → strong discourage
+      if((wd[n]["Server 2"]||0)>0)srvPen+=5;  // also did Srv2 → slight extra
+    } else if(job==="Server 2"){
+      srvPen=(wd[n]["Server 2"]||0)*20;        // already did Srv2 → strong discourage
+      if((wd[n]["Bell/Server 1"]||0)>0)srvPen+=5;
+    }
+    // Bonus for people with few available days getting heavy jobs
+    const lightBonus=availCnt[n]<=3?-(JOBS.find(j=>j.name===job)?.w||1)*2:0;
+    return ww[n]/availCnt[n]+weekRepPen+((histMap[n]||{})[job]||0)*4+acolPen+ahPen+srvPen+lightBonus+Math.random()*1.2;
+  };
+
+  // Core assign
+  const doAssign=(n,d,job)=>{
+    const w=JOBS.find(j=>j.name===job)?.w||1;
+    ww[n]+=w; wd[n][job]=(wd[n][job]||0)+1;
+    if((job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader"))acolyteCnt[n]++;
+    dayJobs[n][d].push(job);
+    if(job==="Bread")breadA[d]=n;
+  };
+
+  // ── canDo: strict check (no double-job allowed) ───────────────────────────
+  const canDo=(n,d,job,{ignoreConsec=false,ignoreCap=false,ignoreAcolCap=false}={})=>{
     if(!isAvail(n,d))return false;
     const p=people.find(x=>x.name===n);
     if((p.restrictions||[]).includes(job))return false;
-    if(isSolo(n,d))return false;
-    const ws=SOLO.has(job)||(isReaderExcl(d)&&job==="Reader");
-    if(ws&&(slots[n][d].main!==null||slots[n][d].tel||slots[n][d].extra.length>0))return false;
-    if(allToday(n,d).some(j=>jobsConflict(j,job)))return false;
-    if(incompatibleViolation(n,d,job))return false;
-    return true;
-  };
-  const eligibleDbl=(n,d,job)=>{
-    if(!isAvail(n,d))return false;
-    const p=people.find(x=>x.name===n);
-    if((p.restrictions||[]).includes(job))return false;
-    if(isSolo(n,d))return false;
-    if(SOLO.has(job)||(isReaderExcl(d)&&job==="Reader"))return false;
-    if(allToday(n,d).some(j=>jobsConflict(j,job)))return false;
-    if(incompatibleViolation(n,d,job))return false;
-    return true;
-  };
-  const canTel=(n,d)=>{
-    if(!isAvail(n,d)||isAH(n,d))return false;
-    const p=people.find(x=>x.name===n);
-    if((p.restrictions||[]).includes("Telephone"))return false;
-    if(slots[n][d].tel||isSolo(n,d))return false;
+    if(soloConflict(n,d,job))return false;
+    if(pairConflict(n,d,job))return false;
+    if(incompatConflict(n,d,job))return false;
+    if(!ignoreConsec&&didYesterday(n,job,d))return false;
+    const maxAllowed=job==="Telephone"?MAX_TEL:MAX_JOB;
+    if(!ignoreCap&&(wd[n][job]||0)>=maxAllowed)return false;
+    // Server group cap: no more than 2 server roles total per week
+    const isServerJob=job==="Bell/Server 1"||job==="Server 2";
+    if(!ignoreCap&&isServerJob&&serverGroupCount(n)>=MAX_SERVER_GROUP)return false;
+    const isAcolEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
+    if(!ignoreAcolCap&&isAcolEquiv&&acolyteCnt[n]>=MAX_ACOL)return false;
     return true;
   };
 
-  // pickMain: 5 passes — always finds someone if humanly possible
-  // Pass 1: no consec + within acolyte cap          (ideal)
-  // Pass 2: allow consec + within cap               (repeat but not yesterday's worker)
-  // Pass 3: allow consec + ignore cap               (had to repeat AND hit cap)
-  // Pass 4: double-job, no consec                   (person already has a job today)
-  // Pass 5: double-job, allow consec               (last resort)
-  const pickMain=(job,d,{excl=null}={})=>{
-    const isAcolyteEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
+  // canDoDouble: person already has a job today — can they take a second?
+  // Only allowed for non-SOLO jobs and only if they don't already have a SOLO job
+  const canDoDouble=(n,d,job,opts={})=>{
+    if(SOLO.has(job)||(isReaderExcl(d)&&job==="Reader"))return false; // SOLO never doubled
+    if(hasSoloToday(n,d))return false; // already has solo job
+    if(!isAvail(n,d))return false;
+    const p=people.find(x=>x.name===n);
+    if((p.restrictions||[]).includes(job))return false;
+    if(pairConflict(n,d,job))return false;
+    if(incompatConflict(n,d,job))return false;
+    if(!opts.ignoreConsec&&didYesterday(n,job,d))return false;
+    const maxAllowed=job==="Telephone"?MAX_TEL:MAX_JOB;
+    if(!opts.ignoreCap&&(wd[n][job]||0)>=maxAllowed)return false;
+    return true;
+  };
+
+  // pickOne: tries progressively relaxed passes until someone is found
+  const pickOne=(job,d,{excl=null}={})=>{
     const passes=[
-      p=>eligible(p.name,d,job)&&!isConsec(p.name,job,d)&&(!isAcolyteEquiv||acolyteCount[p.name]<MAX_ACOLYTE),
-      p=>eligible(p.name,d,job)&&(!isAcolyteEquiv||acolyteCount[p.name]<MAX_ACOLYTE),
-      p=>eligible(p.name,d,job),
-      p=>eligibleDbl(p.name,d,job)&&!isConsec(p.name,job,d),
-      p=>eligibleDbl(p.name,d,job),
+      // ideal: free slot, no consec, within all caps
+      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,job),
+      // free slot, allow consec
+      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,job,{ignoreConsec:true}),
+      // free slot, allow consec + ignore acolyte cap
+      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,job,{ignoreConsec:true,ignoreAcolCap:true}),
+      // double-job, no consec
+      p=>canDoDouble(p.name,d,job),
+      // double-job, allow consec
+      p=>canDoDouble(p.name,d,job,{ignoreConsec:true}),
+      // double-job, ignore all caps
+      p=>canDoDouble(p.name,d,job,{ignoreConsec:true,ignoreCap:true}),
     ];
     for(const pass of passes){
       const c=people.filter(p=>p.name!==excl&&pass(p));
       if(!c.length)continue;
       c.sort((a,b)=>score(a.name,job,d)-score(b.name,job,d));
-      doAssign(c[0].name,d,job,false);
+      doAssign(c[0].name,d,job);
       return c[0].name;
     }
     return null;
@@ -443,94 +489,100 @@ function generateRota(){
     return c[0].name;
   };
 
-  // 0. Exceptions
-  (exceptions||[]).forEach(ex=>{
-    if(!ex.day||!ex.job||!ex.person||!isAvail(ex.person,ex.day))return;
-    if(ex.job==="Telephone"){if(canTel(ex.person,ex.day))doAssign(ex.person,ex.day,"Telephone",true);}
-    else if(eligible(ex.person,ex.day,ex.job)||eligibleDbl(ex.person,ex.day,ex.job))doAssign(ex.person,ex.day,ex.job,false);
-    res.days[ex.day][ex.job]=[ex.person];
-  });
-
-  // 1. Security
-  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Security"));
-  pool.sort((a,b)=>score(a.name,"Security","Monday")-score(b.name,"Security","Monday"));
-  if(pool.length){res.Security=pool[0].name;ww[pool[0].name]+=3;wd[pool[0].name]["Security"]=(wd[pool[0].name]["Security"]||0)+1;}}
-
-  // 2. Laundry couple (fixed Fri–Sun)
-  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Laundry")&&["Friday","Saturday","Sunday"].some(d=>p.availability[d]!==false));
-  pool.sort((a,b)=>score(a.name,"Laundry","Friday")-score(b.name,"Laundry","Friday"));
-  const couple=pool.slice(0,2).map(p=>p.name);
-  res.Laundry=couple;
-  ["Friday","Saturday","Sunday"].forEach(d=>{
-    if(res.days[d]["Laundry"])return;
-    const t=couple.filter(n=>eligible(n,d,"Laundry")&&!isConsec(n,"Laundry",d));
-    const t2=couple.filter(n=>eligible(n,d,"Laundry"));
-    const today=(t.length?t:t2);
-    today.forEach(n=>doAssign(n,d,"Laundry",false));
-    res.days[d]["Laundry"]=today.length?today:["—"];
-  });}
-
-  // Helper: assign a job for a day, with apprentice pairing
   const assignJob=(job,d)=>{
-    if(res.days[d][job])return;
-    const n=pickMain(job,d);
+    if(res.days[d][job])return; // already set by exception
+    const n=pickOne(job,d);
     if(n){
       const p=people.find(x=>x.name===n);
       if((p?.apprentice||[]).includes(job)){
         const tr=findTrainer(n,job,d);
         res.days[d][job]=tr?[n,tr]:[n];
-        if(tr)doAssign(tr,d,job,false);
+        if(tr)doAssign(tr,d,job);
         return;
       }
     }
     res.days[d][job]=n?[n]:["—"];
   };
 
-  // 3. SOLO jobs first (most constrained — must be assigned before light jobs claim people)
-  ["Bell/Server 1","Server 2","Cantor/Psalmist","Acolyte/Sacristan"].forEach(job=>{
-    DAYS.forEach(d=>assignJob(job,d));
+  // ── 0. Pre-assigned exceptions ──────────────────────────────────────────
+  (exceptions||[]).forEach(ex=>{
+    if(!ex.day||!ex.job||!ex.person||!isAvail(ex.person,ex.day))return;
+    doAssign(ex.person,ex.day,ex.job);
+    res.days[ex.day][ex.job]=[ex.person];
   });
 
-  // 4. Reader — Sun/Mon first (exclusive days), then the rest
-  ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].forEach(d=>assignJob("Reader",d));
+  // ── 1. Security (whole week, no daily slot) ─────────────────────────────
+  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Security"));
+  pool.sort((a,b)=>score(a.name,"Security","Monday")-score(b.name,"Security","Monday"));
+  if(pool.length){res.Security=pool[0].name;ww[pool[0].name]+=3;wd[pool[0].name]["Security"]=(wd[pool[0].name]["Security"]||0)+1;}}
 
-  // 5. Light daily jobs
-  ["Water & Dishwasher","Scullery"].forEach(job=>{
-    DAYS.forEach(d=>assignJob(job,d));
+  // ── 2. ALL SOLO/exclusive jobs first, day by day ────────────────────────
+  // Assign all constrained jobs for each day before moving to the next day.
+  // Order within each day: Bell/Srv1, Srv2, Cantor, Acolyte, Reader(excl days)
+  // This ensures no one is double-assigned into a conflict.
+  DAYS.forEach(d=>{
+    // Reader on Sun/Mon is exclusive like a SOLO job — assign it here
+    const soloThisDay=["Bell/Server 1","Server 2","Cantor/Psalmist","Acolyte/Sacristan"];
+    if(isReaderExcl(d))soloThisDay.push("Reader");
+    soloThisDay.forEach(job=>assignJob(job,d));
   });
 
-  // 6. Bread — Thu before Fri (so Fri excludes Thu's person)
+  // ── 3. Reader on non-exclusive days ────────────────────────────────────
+  ["Tuesday","Wednesday","Thursday","Friday","Saturday"].forEach(d=>assignJob("Reader",d));
+
+  // ── 4. Laundry couple (fixed Fri–Sun) ──────────────────────────────────
+  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Laundry")&&["Friday","Saturday","Sunday"].some(d=>p.availability[d]!==false));
+  pool.sort((a,b)=>score(a.name,"Laundry","Friday")-score(b.name,"Laundry","Friday"));
+  const couple=pool.slice(0,2).map(p=>p.name);
+  res.Laundry=couple;
+  ["Friday","Saturday","Sunday"].forEach(d=>{
+    if(res.days[d]["Laundry"])return;
+    // Assign both members of the couple if available and no conflict
+    const today=couple.filter(n=>{
+      if(!isAvail(n,d))return false;
+      if(soloConflict(n,d,"Laundry"))return false;
+      if(pairConflict(n,d,"Laundry"))return false;
+      return true;
+    });
+    today.forEach(n=>doAssign(n,d,"Laundry"));
+    res.days[d]["Laundry"]=today.length?today:["—"];
+  });}
+
+  // ── 5. Water, Scullery, Bread ──────────────────────────────────────────
+  ["Water & Dishwasher","Scullery"].forEach(job=>DAYS.forEach(d=>assignJob(job,d)));
   ["Thursday","Friday"].forEach(d=>{
     if(res.days[d]["Bread"])return;
     const excl=d==="Friday"?breadA["Thursday"]:null;
-    const n=pickMain("Bread",d,{excl});
+    const n=pickOne("Bread",d,{excl});
     res.days[d]["Bread"]=n?[n]:["—"];
   });
 
-  // 7. Telephone — always assigned, tiered priority
+  // ── 6. Telephone — always assigned, 1 person, tiered ───────────────────
   DAYS.forEach(d=>{
     if(res.days[d]["Telephone"]&&!res.days[d]["Telephone"].includes("—"))return;
-    const tiers=[
-      // idle (no main job yet), no consec
-      people.filter(p=>canTel(p.name,d)&&slots[p.name][d].main===null&&!isConsec(p.name,"Telephone",d)),
+
+    const telPasses=[
+      // ideal: idle person (no jobs today), no consec
+      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,"Telephone"),
       // idle, allow consec
-      people.filter(p=>canTel(p.name,d)&&slots[p.name][d].main===null),
-      // good pair, no consec
-      people.filter(p=>canTel(p.name,d)&&TEL_GOOD.has(slots[p.name][d].main)&&!isConsec(p.name,"Telephone",d)),
+      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,"Telephone",{ignoreConsec:true}),
+      // good pair (Reader/Scullery), no consec
+      p=>todayJobs(p.name,d).some(j=>TEL_GOOD.has(j))&&canDoDouble(p.name,d,"Telephone"),
       // good pair, allow consec
-      people.filter(p=>canTel(p.name,d)&&TEL_GOOD.has(slots[p.name][d].main)),
-      // water pair (bad), no consec
-      people.filter(p=>canTel(p.name,d)&&slots[p.name][d].main===TEL_BAD&&!isConsec(p.name,"Telephone",d)),
-      // anyone who can do tel, no consec
-      people.filter(p=>canTel(p.name,d)&&!isConsec(p.name,"Telephone",d)),
-      // anyone who can do tel (last resort, may repeat)
-      people.filter(p=>canTel(p.name,d)),
+      p=>todayJobs(p.name,d).some(j=>TEL_GOOD.has(j))&&canDoDouble(p.name,d,"Telephone",{ignoreConsec:true}),
+      // water pair (discouraged), no consec
+      p=>todayJobs(p.name,d).includes(TEL_BAD)&&canDoDouble(p.name,d,"Telephone"),
+      // anyone available, no consec
+      p=>canDoDouble(p.name,d,"Telephone")||(todayJobs(p.name,d).length===0&&canDo(p.name,d,"Telephone",{ignoreConsec:true,ignoreCap:true})),
+      // absolute last resort: ignore cap and consec
+      p=>isAvail(p.name,d)&&!isAH(p.name,d)&&!hasSoloToday(p.name,d)&&!(people.find(x=>x.name===p.name).restrictions||[]).includes("Telephone"),
     ];
-    for(const t of tiers){
-      if(!t.length)continue;
-      t.sort((a,b)=>score(a.name,"Telephone",d)-score(b.name,"Telephone",d));
-      doAssign(t[0].name,d,"Telephone",true);
-      res.days[d]["Telephone"]=[t[0].name];
+    for(const pass of telPasses){
+      const c=people.filter(pass);
+      if(!c.length)continue;
+      c.sort((a,b)=>score(a.name,"Telephone",d)-score(b.name,"Telephone",d));
+      doAssign(c[0].name,d,"Telephone");
+      res.days[d]["Telephone"]=[c[0].name];
       return;
     }
     res.days[d]["Telephone"]=["—"];
@@ -1014,9 +1066,21 @@ function clearHistory(){if(!confirm("Delete all history?"))return;history=[];sav
 
 // ── Person colour palette ────────────────────────────────────────────────────
 const PERSON_COLOURS=[
-  "#e74c3c","#e67e22","#f1c40f","#2ecc71","#1abc9c",
-  "#3498db","#9b59b6","#e91e63","#00bcd4","#8bc34a",
-  "#ff5722","#795548","#607d8b","#f06292","#4db6ac",
+  "#e53935", // strong red
+  "#1565c0", // deep blue
+  "#f57f17", // amber/orange
+  "#6a1b9a", // deep purple
+  "#00838f", // teal
+  "#2e7d32", // dark green
+  "#ad1457", // hot pink/magenta
+  "#4527a0", // indigo
+  "#d84315", // burnt orange
+  "#00695c", // dark teal-green
+  "#283593", // navy
+  "#558b2f", // olive green
+  "#4e342e", // brown
+  "#37474f", // dark blue-grey
+  "#880e4f", // dark raspberry
 ];
 function personColour(name){
   const idx=people.findIndex(p=>p.name===name);
