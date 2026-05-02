@@ -498,6 +498,10 @@ function generateRota(){
         const tr=findTrainer(n,job,d);
         res.days[d][job]=tr?[n,tr]:[n];
         if(tr)doAssign(tr,d,job);
+        // KEY: if apprentice is paired with a trainer, the apprentice is NOT
+        // treated as having a solo job — they can still receive a second lighter job.
+        // We do NOT call doAssign for n here when paired, so their dayJobs stays
+        // reflecting only the apprentice assignment (already done inside pickOne).
         return;
       }
     }
@@ -586,6 +590,54 @@ function generateRota(){
       return;
     }
     res.days[d]["Telephone"]=["—"];
+  });
+
+  // ── 7. Gap filler — no slot should stay "—" ────────────────────────────
+  // When a job can't be filled normally, add it to someone as a second job.
+  // Priority for who gets the extra work:
+  //   1. Someone idle (0 jobs today) — best option
+  //   2. Someone already doing Scullery — lightest job, easiest to combine
+  //   3. Someone already doing Water — second lightest
+  //   4. Anyone with exactly 1 job — last resort
+  // NEVER give a 3rd job to someone who already has 2.
+  // SOLO jobs (Server1/2, Cantor, Acolyte, Reader Sun/Mon) can only go to idle people.
+  const dailyJobs=JOBS.filter(j=>j.days[0]!=="WEEK"&&j.name!=="Security"&&j.name!=="Laundry");
+
+  dailyJobs.forEach(jobDef=>{
+    jobDef.days.forEach(d=>{
+      const cur=res.days[d][jobDef.name];
+      if(cur&&cur.length>0&&!cur.includes("—"))return;
+
+      const restr=(n)=>people.find(x=>x.name===n)?.restrictions||[];
+      const physOk=(n)=>{
+        if(!isAvail(n,d))return false;
+        if(restr(n).includes(jobDef.name))return false;
+        if(pairConflict(n,d,jobDef.name))return false;
+        if(incompatConflict(n,d,jobDef.name))return false;
+        if(hasSoloToday(n,d))return false;
+        if(todayJobs(n,d).length>=2)return false; // never 3 jobs
+        const isExclusiveJob=SOLO.has(jobDef.name)||(isReaderExcl(d)&&jobDef.name==="Reader");
+        if(isExclusiveJob&&todayJobs(n,d).length>0)return false;
+        return true;
+      };
+
+      const gapPasses=[
+        p=>physOk(p.name)&&todayJobs(p.name,d).length===0,                       // idle
+        p=>physOk(p.name)&&todayJobs(p.name,d).includes("Scullery"),              // scullery person
+        p=>physOk(p.name)&&todayJobs(p.name,d).includes("Water & Dishwasher"),    // water person
+        p=>physOk(p.name)&&todayJobs(p.name,d).length===1,                        // anyone with 1 job
+      ];
+
+      for(const pass of gapPasses){
+        const c=people.filter(pass);
+        if(!c.length)continue;
+        c.sort((a,b)=>score(a.name,jobDef.name,d)-score(b.name,jobDef.name,d));
+        doAssign(c[0].name,d,jobDef.name);
+        res.days[d][jobDef.name]=[c[0].name];
+        return;
+      }
+      res.days[d][jobDef.name]=["—"]; // truly impossible
+    });
   });
 
   return res;
