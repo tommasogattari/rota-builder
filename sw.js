@@ -1,4 +1,4 @@
-const CACHE = "rota-v1";
+const CACHE = "rota-v3";
 const ASSETS = ["./index.html", "./manifest.json"];
 
 self.addEventListener("install", e => {
