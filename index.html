@@ -233,6 +233,7 @@ let history = [];
 let rota = null;
 let notes = {...FIXED_NOTES};
 let exceptions = [];
+let incompatible = []; // [{personA, personB}] — cannot be Server1+Server2 or Acolyte+Reader together
 let viewTab = "jobs";
 let editTarget = null; // {day, job}
 const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
@@ -257,7 +258,7 @@ function saveRota() {
 
 // Export full state (rota + people + history) as JSON file for import on other devices
 function exportJSON(){
-  const data={people,history,rota,notes,exceptions,version:2};
+  const data={people,history,rota,notes,exceptions,incompatible,version:2};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
   const url=URL.createObjectURL(blob);
   const a=document.createElement("a");
@@ -281,6 +282,7 @@ function importJSON(){
         if(d.history) history=d.history;
         if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; }
         if(d.exceptions) exceptions=d.exceptions;
+        if(d.incompatible) incompatible=d.incompatible;
         savePeople();saveHistory();saveRota();
         step=rota?3:0;
         render();
@@ -356,6 +358,25 @@ function generateRota(){
     else{slots[n][d].extra.push(job);if(job==="Bread")breadA[d]=n;}
   };
 
+  // Jobs that form a "pair" for incompatibility purposes
+  const INCOMPAT_GROUPS=[
+    new Set(["Bell/Server 1","Server 2"]),
+    new Set(["Acolyte/Sacristan","Reader"]),
+  ];
+  // Check if assigning `job` to `n` on `day` would violate an incompatible pair rule
+  const incompatibleViolation=(n,d,job)=>{
+    for(const pair of incompatible){
+      const other=pair.personA===n?pair.personB:pair.personB===n?pair.personA:null;
+      if(!other)continue;
+      // Check if the other person already has a job in the same group as `job`
+      const group=INCOMPAT_GROUPS.find(g=>g.has(job));
+      if(!group)continue;
+      const otherJobs=allToday(other,d);
+      if(otherJobs.some(j=>group.has(j))) return true;
+    }
+    return false;
+  };
+
   // Base eligibility (ignoring consecutive and acolyte-cap — callers add those)
   const eligible=(n,d,job)=>{
     if(!isAvail(n,d))return false;
@@ -365,6 +386,7 @@ function generateRota(){
     const ws=SOLO.has(job)||(isReaderExcl(d)&&job==="Reader");
     if(ws&&(slots[n][d].main!==null||slots[n][d].tel||slots[n][d].extra.length>0))return false;
     if(allToday(n,d).some(j=>jobsConflict(j,job)))return false;
+    if(incompatibleViolation(n,d,job))return false;
     return true;
   };
   const eligibleDbl=(n,d,job)=>{
@@ -374,6 +396,7 @@ function generateRota(){
     if(isSolo(n,d))return false;
     if(SOLO.has(job)||(isReaderExcl(d)&&job==="Reader"))return false;
     if(allToday(n,d).some(j=>jobsConflict(j,job)))return false;
+    if(incompatibleViolation(n,d,job))return false;
     return true;
   };
   const canTel=(n,d)=>{
@@ -650,10 +673,12 @@ function renderExceptions(){
   const jobOpts=JOBS.filter(j=>j.days[0]!=="WEEK").map(j=>`<option value="${j.name}">${j.name}</option>`).join("");
   const pplOpts=`<option value="">— person —</option>`+people.map(p=>`<option value="${p.name}">${p.name}</option>`).join("");
   return `
-    <div class="sec-title">Weekly Exceptions</div>
-    <div class="sec-desc">Pin specific assignments before generating. These override the algorithm.</div>
+    <div class="sec-title">Weekly Exceptions &amp; Restrictions</div>
+    <div class="sec-desc">Pin specific assignments, or block two people from working together in the same role group.</div>
+
+    <!-- Fixed assignments -->
     <div class="exc-box">
-      <div class="exc-hdr">Add an exception</div>
+      <div class="exc-hdr">📌 Fixed assignment — pin a person to a specific job &amp; day</div>
       <div class="exc-form">
         <div class="exc-form-row">
           <span class="exc-lbl">Day:</span>
@@ -669,13 +694,43 @@ function renderExceptions(){
         </div>
         <button class="btn btn-gold btn-sm" onclick="addException()" style="align-self:flex-start">Add</button>
       </div>
-      ${exceptions.length>0?`<div class="exc-chips">${exceptions.map((ex,i)=>`
+      ${exceptions.length>0?`<div class="exc-chips" style="margin-top:10px">${exceptions.map((ex,i)=>`
         <div class="exc-chip">
-          <span><strong>${ex.day}</strong> · ${ex.job} → ${ex.person}</span>
+          <span><strong>${ex.day}</strong> · ${ex.job} → <span style="color:${personColour(ex.person)};font-weight:700">${ex.person}</span></span>
           <button class="btn btn-danger" style="padding:1px 6px;font-size:.66rem" onclick="removeException(${i})">✕</button>
         </div>`).join("")}</div>`
-      :`<div style="font-size:.71rem;color:#3a4050;margin-top:6px">No exceptions — all automatic.</div>`}
+      :`<div style="font-size:.71rem;color:#3a4050;margin-top:6px">No fixed assignments.</div>`}
     </div>
+
+    <!-- Incompatible pairs -->
+    <div class="exc-box" style="margin-top:12px">
+      <div class="exc-hdr">🚫 Incompatible pair — two people who cannot work together</div>
+      <div style="font-size:.72rem;color:#6a7080;margin-bottom:10px">
+        These two people will never be assigned to the same <strong>role group</strong> on the same day.<br/>
+        Role groups: <em>Server 1 + Server 2</em> &nbsp;|&nbsp; <em>Acolyte + Reader</em>
+      </div>
+      <div class="exc-form">
+        <div class="exc-form-row">
+          <span class="exc-lbl">Person A:</span>
+          <select class="input" id="inc-a" style="flex:1">${pplOpts}</select>
+        </div>
+        <div class="exc-form-row">
+          <span class="exc-lbl">cannot be with</span>
+          <select class="input" id="inc-b" style="flex:1">${pplOpts}</select>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="addIncompatible()" style="align-self:flex-start">Add</button>
+      </div>
+      ${incompatible.length>0?`<div class="exc-chips" style="margin-top:10px">${incompatible.map((ic,i)=>`
+        <div class="exc-chip">
+          <span style="color:${personColour(ic.personA)};font-weight:700">${ic.personA}</span>
+          <span style="color:#5a6070;font-size:.7rem"> 🚫 </span>
+          <span style="color:${personColour(ic.personB)};font-weight:700">${ic.personB}</span>
+          <span style="color:#5a6070;font-size:.68rem"> (Srv1/2 &amp; Acol/Reader)</span>
+          <button class="btn btn-danger" style="padding:1px 6px;font-size:.66rem;margin-left:4px" onclick="removeIncompatible(${i})">✕</button>
+        </div>`).join("")}</div>`
+      :`<div style="font-size:.71rem;color:#3a4050;margin-top:6px">No incompatible pairs.</div>`}
+    </div>
+
     <div class="nav-row">
       <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
       <button class="btn btn-gold btn-lg" onclick="doGenerate()">Generate Rota →</button>
@@ -902,6 +957,18 @@ function addException(){
   render();
 }
 function removeException(i){exceptions.splice(i,1);render();}
+
+function addIncompatible(){
+  const a=document.getElementById("inc-a")?.value;
+  const b=document.getElementById("inc-b")?.value;
+  if(!a||!b||a===b)return;
+  // Avoid duplicates
+  const already=incompatible.some(ic=>(ic.personA===a&&ic.personB===b)||(ic.personA===b&&ic.personB===a));
+  if(already)return;
+  incompatible.push({personA:a,personB:b});
+  render();
+}
+function removeIncompatible(i){incompatible.splice(i,1);render();}
 
 function doGenerate(){
   rota=generateRota();
