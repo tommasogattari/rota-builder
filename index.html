@@ -126,10 +126,13 @@ select.input{cursor:pointer;}
 
 /* Edit modal */
 .modal-overlay{position:fixed;inset:0;background:#000a;z-index:200;display:flex;align-items:flex-end;justify-content:center;}
-.modal{background:#1e2438;border-radius:16px 16px 0 0;padding:20px;width:100%;max-width:500px;border-top:1px solid #3a4560;}
-.modal-title{font-family:'Playfair Display',serif;color:#c9a84c;font-size:1rem;margin-bottom:12px;}
-.modal select{width:100%;background:#12151e;border:1px solid #2a3045;border-radius:8px;padding:10px 12px;color:#c0b898;font-family:'Source Sans 3',sans-serif;font-size:.85rem;margin-bottom:12px;outline:none;-webkit-appearance:none;}
+.modal{background:#1e2438;border-radius:16px 16px 0 0;padding:20px;width:100%;max-width:500px;border-top:1px solid #3a4560;max-height:80vh;overflow-y:auto;}
+.modal-title{font-family:'Playfair Display',serif;color:#c9a84c;font-size:1rem;margin-bottom:6px;}
 .modal-btns{display:flex;gap:8px;}
+.pick-btn{padding:7px 13px;border-radius:20px;border:2px solid transparent;font-family:'Source Sans 3',sans-serif;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .15s;color:#fff;opacity:.75;}
+.pick-btn.selected{opacity:1;border-color:#fff;transform:scale(1.05);}
+.pick-btn.pick-1{border-style:solid;}
+.pick-btn.pick-2{border-style:dashed;}
 
 /* Person summary */
 .psummary{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:14px;}
@@ -189,13 +192,21 @@ select.input{cursor:pointer;}
   <div class="content" id="content"></div>
 </div>
 
-<!-- Edit modal -->
+<!-- Edit modal — tap to pick up to 2 people -->
 <div class="modal-overlay" id="modal" style="display:none" onclick="closeModal()">
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-title" id="modal-title"></div>
-    <select id="modal-select"></select>
+    <div style="font-size:.72rem;color:#6a7080;margin-bottom:12px" id="modal-hint">
+      Tap a name to select. Tap again to deselect. Select two names for a pair (e.g. apprentice + trainer).
+    </div>
+    <div id="modal-people" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px"></div>
+    <div id="modal-selected" style="min-height:36px;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:.72rem;color:#4a5060">Selected:</span>
+      <span id="modal-sel-display" style="font-size:.82rem;color:#8a9090;font-style:italic">nobody</span>
+    </div>
     <div class="modal-btns">
       <button class="btn btn-gold" onclick="applyEdit()">Save</button>
+      <button class="btn btn-outline btn-sm" onclick="clearModalSelection()">Clear</button>
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
     </div>
   </div>
@@ -1086,21 +1097,94 @@ function switchTab(t){viewTab=t;render();}
 
 function setNote(day,val){notes[day]=val;saveRota();}
 
-// ── Edit modal ─────────────────────────────────────────────────────────────────
+// ── Edit modal — person picker ─────────────────────────────────────────────
+let modalSelected=[]; // up to 2 names
+
 function openEdit(day,job){
   editTarget={day,job};
-  const cur=((rota?.days[day]||{})[job]||[]).filter(x=>x!=="—")[0]||"";
+  const cur=((rota?.days[day]||{})[job]||[]).filter(x=>x!=="—");
+  modalSelected=[...cur].slice(0,2);
+
   document.getElementById("modal-title").textContent=`${day} · ${job}`;
-  const sel=document.getElementById("modal-select");
+
+  // Build person buttons — all people available that day
   const avail=people.filter(p=>p.availability[day]!==false);
-  sel.innerHTML=`<option value="">— unassign —</option>`+avail.map(p=>`<option value="${p.name}" ${p.name===cur?"selected":""}>${p.name}</option>`).join("");
+  const container=document.getElementById("modal-people");
+  container.innerHTML=avail.map(p=>{
+    const col=personColour(p.name);
+    const idx=modalSelected.indexOf(p.name);
+    const selClass=idx===0?"pick-btn pick-1 selected":idx===1?"pick-btn pick-2 selected":"pick-btn";
+    return `<button class="${selClass}" id="pick-${p.name.replace(/\s/g,'_')}"
+      style="background:${col}"
+      onclick="togglePickPerson('${p.name}')">${p.name}</button>`;
+  }).join("")+
+  // "Unassign" option
+  `<button class="pick-btn${modalSelected.length===0?" selected":""}"
+    style="background:#2a3045;border-color:#5a6070"
+    id="pick-unassign"
+    onclick="togglePickPerson('')">✕ Unassign</button>`;
+
+  updateModalDisplay();
   document.getElementById("modal").style.display="flex";
 }
-function closeModal(){document.getElementById("modal").style.display="none";editTarget=null;}
+
+function togglePickPerson(name){
+  if(name===""){
+    // unassign
+    modalSelected=[];
+  } else {
+    const i=modalSelected.indexOf(name);
+    if(i>=0){
+      modalSelected.splice(i,1); // deselect
+    } else if(modalSelected.length<2){
+      modalSelected.push(name);  // select (max 2)
+    } else {
+      // already 2 selected: replace the second
+      modalSelected[1]=name;
+    }
+  }
+  updateModalDisplay();
+}
+
+function updateModalDisplay(){
+  // Update button states
+  const avail=people.filter(p=>p.availability[editTarget?.day]!==false);
+  avail.forEach(p=>{
+    const btn=document.getElementById("pick-"+p.name.replace(/\s/g,'_'));
+    if(!btn)return;
+    const idx=modalSelected.indexOf(p.name);
+    btn.className=idx===0?"pick-btn pick-1 selected":idx===1?"pick-btn pick-2 selected":"pick-btn";
+  });
+  const unassignBtn=document.getElementById("pick-unassign");
+  if(unassignBtn)unassignBtn.className="pick-btn"+(modalSelected.length===0?" selected":"");
+
+  // Update selected display
+  const disp=document.getElementById("modal-sel-display");
+  if(!disp)return;
+  if(modalSelected.length===0){
+    disp.innerHTML=`<span style="color:#8a9090;font-style:italic">nobody (will unassign)</span>`;
+  } else {
+    disp.innerHTML=modalSelected.map((n,i)=>`
+      <span style="display:inline-block;padding:2px 10px;border-radius:12px;background:${personColour(n)};color:#fff;font-weight:700;font-size:.82rem">
+        ${i===1?"+ ":""}${n}
+      </span>`).join("");
+  }
+}
+
+function clearModalSelection(){
+  modalSelected=[];
+  updateModalDisplay();
+}
+
+function closeModal(){
+  document.getElementById("modal").style.display="none";
+  editTarget=null;
+  modalSelected=[];
+}
+
 function applyEdit(){
   if(!editTarget||!rota)return;
-  const val=document.getElementById("modal-select").value;
-  rota.days[editTarget.day][editTarget.job]=val?[val]:["—"];
+  rota.days[editTarget.day][editTarget.job]=modalSelected.length>0?[...modalSelected]:["—"];
   saveRota();closeModal();render();
 }
 
