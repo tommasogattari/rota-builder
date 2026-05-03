@@ -418,7 +418,7 @@ function generateRota(){
     }
     // Bonus for people with few available days getting heavy jobs
     const lightBonus=availCnt[n]<=3?-(JOBS.find(j=>j.name===job)?.w||1)*2:0;
-    return ww[n]/availCnt[n]+weekRepPen+((histMap[n]||{})[job]||0)*4+acolPen+ahPen+srvPen+lightBonus+Math.random()*1.2;
+    return ww[n]/availCnt[n]+weekRepPen+((histMap[n]||{})[job]||0)*18+acolPen+ahPen+srvPen+lightBonus+Math.random()*8;
   };
 
   // Core assign
