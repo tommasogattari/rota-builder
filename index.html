@@ -949,7 +949,7 @@ function renderRota(){
     </div>
     <div class="nav-row">
       <button class="btn btn-outline" onclick="goStep(2)">← Edit</button>
-      <button class="btn btn-gold" onclick="doGenerate()">↺ Regen</button>
+      <button class="btn btn-gold" onclick="doRegen()">↺ Regen</button>
       <button class="btn btn-gold" onclick="saveToHistory()">💾 Save</button>
       <button class="btn btn-outline" onclick="exportColour()">🎨 Colour Export</button>
       <button class="btn btn-gold" onclick="exportPrint()">📄 Print Export</button>
@@ -1145,9 +1145,18 @@ function removeIncompatible(i){incompatible.splice(i,1);render();}
 function doGenerate(){
   rota=generateRota();
   saveRota();
+  viewTab="jobs"; // always show jobs tab after generating
   step=3;
   render();
   window.scrollTo(0,0);
+}
+
+function doRegen(){
+  rota=generateRota();
+  saveRota();
+  viewTab="jobs";
+  render();
+  // Don't scroll to top — user is already on the rota page
 }
 
 function switchTab(t){viewTab=t;render();}
