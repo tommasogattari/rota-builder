@@ -244,9 +244,10 @@ let history = [];
 let rota = null;
 let notes = {...FIXED_NOTES};
 let exceptions = [];
-let incompatible = []; // [{personA, personB}] — cannot be Server1+Server2 or Acolyte+Reader together
+let incompatible = [];
+let rotaWeek = ""; // ISO date string of Monday for the rota week
 let viewTab = "jobs";
-let editTarget = null; // {day, job}
+let editTarget = null;
 const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -256,7 +257,7 @@ function load() {
   try { const v = localStorage.getItem(HK); if(v) history = JSON.parse(v); } catch(_){}
   try {
     const v = localStorage.getItem(RK);
-    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; }
+    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; }
   } catch(_){}
   // Ensure all people have required fields
   people = people.map(p=>({...p, apprentice:p.apprentice||[], restrictions:p.restrictions||[]}));
@@ -264,12 +265,12 @@ function load() {
 function savePeople() { localStorage.setItem(PK, JSON.stringify(people)); }
 function saveHistory() { localStorage.setItem(HK, JSON.stringify(history)); }
 function saveRota() {
-  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes}));
+  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes,rotaWeek}));
 }
 
 // Export full state (rota + people + history) as JSON file for import on other devices
 function exportJSON(){
-  const data={people,history,rota,notes,exceptions,incompatible,version:2};
+  const data={people,history,rota,notes,rotaWeek,exceptions,incompatible,version:2};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
   const url=URL.createObjectURL(blob);
   const a=document.createElement("a");
@@ -291,7 +292,7 @@ function importJSON(){
         const d=JSON.parse(ev.target.result);
         if(d.people) people=d.people.map(p=>({...p,apprentice:p.apprentice||[],restrictions:p.restrictions||[]}));
         if(d.history) history=d.history;
-        if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; }
+        if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; }
         if(d.exceptions) exceptions=d.exceptions;
         if(d.incompatible) incompatible=d.incompatible;
         savePeople();saveHistory();saveRota();
@@ -783,13 +784,44 @@ function renderSettings(){
     </div>`;
 }
 
+// Compute a human-readable week label from a Monday ISO date string
+function weekLabel(mondayISO){
+  if(!mondayISO)return "";
+  const mon=new Date(mondayISO+"T00:00:00");
+  const sun=new Date(mon);sun.setDate(mon.getDate()+6);
+  const fmt=(d,showYear)=>d.toLocaleDateString("en-GB",{day:"numeric",month:"short",...(showYear?{year:"numeric"}:{})});
+  return `${fmt(mon,false)} – ${fmt(sun,true)}`;
+}
+
+// Default rotaWeek to next Monday if not set
+function defaultWeek(){
+  const today=new Date();
+  const diff=(1-today.getDay()+7)%7||7;
+  const mon=new Date(today);mon.setDate(today.getDate()+diff);
+  return mon.toISOString().slice(0,10);
+}
+
 function renderExceptions(){
   const dayOpts=DAYS.map(d=>`<option value="${d}">${d}</option>`).join("");
   const jobOpts=JOBS.filter(j=>j.days[0]!=="WEEK").map(j=>`<option value="${j.name}">${j.name}</option>`).join("");
   const pplOpts=`<option value="">— person —</option>`+people.map(p=>`<option value="${p.name}">${p.name}</option>`).join("");
   return `
     <div class="sec-title">Weekly Exceptions &amp; Restrictions</div>
-    <div class="sec-desc">Pin specific assignments, or block two people from working together in the same role group.</div>
+    <div class="sec-desc">Set the week dates, pin specific assignments, or block incompatible pairs.</div>
+
+    <!-- Week date picker -->
+    <div class="exc-box" style="margin-bottom:14px">
+      <div class="exc-hdr">📅 Week starting (Monday)</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <input type="date" class="input" id="week-date"
+          style="flex:1;max-width:200px"
+          value="${rotaWeek||defaultWeek()}"
+          onchange="rotaWeek=this.value;saveRota()"/>
+        <span style="font-size:.82rem;color:#c9a84c;font-family:'Playfair Display',serif">
+          ${rotaWeek?weekLabel(rotaWeek):weekLabel(defaultWeek())}
+        </span>
+      </div>
+    </div>
 
     <!-- Fixed assignments -->
     <div class="exc-box">
@@ -859,7 +891,7 @@ function renderRota(){
   const laundryA=rota.Laundry[0]||"";
   const laundryB=rota.Laundry[1]||"";
   return `
-    <div class="sec-title">Generated Rota</div>
+    <div class="sec-title">Generated Rota${rotaWeek?` — <span style="font-size:.9rem;color:#e8e0d0">${weekLabel(rotaWeek)}</span>`:""}</div>
     <div class="sec-desc">Tap ✎ on any cell to edit manually.${exceptions.length>0?` · ${exceptions.length} exception${exceptions.length>1?"s":""} applied.`:""}</div>
     <div class="banners">
       <div class="banner">
@@ -1191,7 +1223,7 @@ function applyEdit(){
 function saveToHistory(){
   if(!rota)return;
   const now=new Date();
-  const label=`Week of ${now.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}`;
+  const label=rotaWeek?`Week of ${weekLabel(rotaWeek)}`:`Week of ${new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}`;
   history.push({label,date:now.toISOString(),assignments:buildAssignments(rota),security:rota.Security,laundry:rota.Laundry});
   saveHistory();
   alert(`✓ Saved! ${history.length} week${history.length!==1?"s":""} in history.`);
@@ -1288,9 +1320,7 @@ function exportPrint(){
   if(!rota)return;
 
   // Compute week dates: next Monday
-  const today=new Date();
-  const diff=(1-today.getDay()+7)%7||7;
-  const monday=new Date(today);monday.setDate(today.getDate()+diff);
+  const monday=rotaWeek?new Date(rotaWeek+"T00:00:00"):(()=>{const today=new Date();const diff=(1-today.getDay()+7)%7||7;const m=new Date(today);m.setDate(today.getDate()+diff);return m;})();
   const weekDates=DAYS.map((_,i)=>{const d=new Date(monday);d.setDate(monday.getDate()+i);return d;});
   const fmt=(d)=>d.getDate();
   const monthLabel=(d)=>d.toLocaleDateString("en-GB",{month:"long"}).toUpperCase();
