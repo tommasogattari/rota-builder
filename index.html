@@ -245,7 +245,8 @@ let rota = null;
 let notes = {...FIXED_NOTES};
 let exceptions = [];
 let incompatible = [];
-let rotaWeek = ""; // ISO date string of Monday for the rota week
+let rotaWeek = "";
+let dayOut = new Set(); // days with no work (day out) // ISO date string of Monday for the rota week
 let viewTab = "jobs";
 let editTarget = null;
 const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
@@ -257,7 +258,7 @@ function load() {
   try { const v = localStorage.getItem(HK); if(v) history = JSON.parse(v); } catch(_){}
   try {
     const v = localStorage.getItem(RK);
-    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; }
+    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); }
   } catch(_){}
   // Ensure all people have required fields
   people = people.map(p=>({...p, apprentice:p.apprentice||[], restrictions:p.restrictions||[]}));
@@ -265,12 +266,12 @@ function load() {
 function savePeople() { localStorage.setItem(PK, JSON.stringify(people)); }
 function saveHistory() { localStorage.setItem(HK, JSON.stringify(history)); }
 function saveRota() {
-  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes,rotaWeek}));
+  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes,rotaWeek,dayOut:[...dayOut]}));
 }
 
 // Export full state (rota + people + history) as JSON file for import on other devices
 function exportJSON(){
-  const data={people,history,rota,notes,rotaWeek,exceptions,incompatible,version:2};
+  const data={people,history,rota,notes,rotaWeek,dayOut:[...dayOut],exceptions,incompatible,version:2};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
   const url=URL.createObjectURL(blob);
   const a=document.createElement("a");
@@ -292,7 +293,7 @@ function importJSON(){
         const d=JSON.parse(ev.target.result);
         if(d.people) people=d.people.map(p=>({...p,apprentice:p.apprentice||[],restrictions:p.restrictions||[]}));
         if(d.history) history=d.history;
-        if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; }
+        if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); }
         if(d.exceptions) exceptions=d.exceptions;
         if(d.incompatible) incompatible=d.incompatible;
         savePeople();saveHistory();saveRota();
@@ -533,27 +534,26 @@ function generateRota(){
   if(pool.length){res.Security=pool[0].name;ww[pool[0].name]+=3;wd[pool[0].name]["Security"]=(wd[pool[0].name]["Security"]||0)+1;}}
 
   // ── 2. ALL SOLO/exclusive jobs first, day by day ────────────────────────
-  // Assign all constrained jobs for each day before moving to the next day.
-  // Order within each day: Bell/Srv1, Srv2, Cantor, Acolyte, Reader(excl days)
-  // This ensures no one is double-assigned into a conflict.
   DAYS.forEach(d=>{
-    // Reader on Sun/Mon is exclusive like a SOLO job — assign it here
+    if(dayOut.has(d))return;
     const soloThisDay=["Bell/Server 1","Server 2","Cantor/Psalmist","Acolyte/Sacristan"];
     if(isReaderExcl(d))soloThisDay.push("Reader");
     soloThisDay.forEach(job=>assignJob(job,d));
   });
 
   // ── 3. Reader on non-exclusive days ────────────────────────────────────
-  ["Tuesday","Wednesday","Thursday","Friday","Saturday"].forEach(d=>assignJob("Reader",d));
+  ["Tuesday","Wednesday","Thursday","Friday","Saturday"].forEach(d=>{
+    if(!dayOut.has(d))assignJob("Reader",d);
+  });
 
   // ── 4. Laundry couple (fixed Fri–Sun) ──────────────────────────────────
-  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Laundry")&&["Friday","Saturday","Sunday"].some(d=>p.availability[d]!==false));
+  {const pool=people.filter(p=>!(p.restrictions||[]).includes("Laundry")&&["Friday","Saturday","Sunday"].some(d=>!dayOut.has(d)&&p.availability[d]!==false));
   pool.sort((a,b)=>score(a.name,"Laundry","Friday")-score(b.name,"Laundry","Friday"));
   const couple=pool.slice(0,2).map(p=>p.name);
   res.Laundry=couple;
   ["Friday","Saturday","Sunday"].forEach(d=>{
+    if(dayOut.has(d))return;
     if(res.days[d]["Laundry"])return;
-    // Assign both members of the couple if available and no conflict
     const today=couple.filter(n=>{
       if(!isAvail(n,d))return false;
       if(soloConflict(n,d,"Laundry"))return false;
@@ -565,8 +565,11 @@ function generateRota(){
   });}
 
   // ── 5. Water, Scullery, Bread ──────────────────────────────────────────
-  ["Water & Dishwasher","Scullery"].forEach(job=>DAYS.forEach(d=>assignJob(job,d)));
+  ["Water & Dishwasher","Scullery"].forEach(job=>DAYS.forEach(d=>{
+    if(!dayOut.has(d))assignJob(job,d);
+  }));
   ["Thursday","Friday"].forEach(d=>{
+    if(dayOut.has(d))return;
     if(res.days[d]["Bread"])return;
     const excl=d==="Friday"?breadA["Thursday"]:null;
     const n=pickOne("Bread",d,{excl});
@@ -575,6 +578,7 @@ function generateRota(){
 
   // ── 6. Telephone — always assigned, 1 person, tiered ───────────────────
   DAYS.forEach(d=>{
+    if(dayOut.has(d))return;
     if(res.days[d]["Telephone"]&&!res.days[d]["Telephone"].includes("—"))return;
 
     const telPasses=[
@@ -617,7 +621,7 @@ function generateRota(){
 
   dailyJobs.forEach(jobDef=>{
     jobDef.days.forEach(d=>{
-      const cur=res.days[d][jobDef.name];
+      if(dayOut.has(d))return; // skip day out completely
       if(cur&&cur.length>0&&!cur.includes("—"))return;
 
       const restr=(n)=>people.find(x=>x.name===n)?.restrictions||[];
@@ -823,7 +827,22 @@ function renderExceptions(){
       </div>
     </div>
 
-    <!-- Fixed assignments -->
+    <!-- Day Out selector -->
+    <div class="exc-box" style="margin-bottom:14px">
+      <div class="exc-hdr">🏖 Day Out — no jobs assigned on these days</div>
+      <div style="font-size:.72rem;color:#6a7080;margin-bottom:10px">Tap a day to toggle. Day Out days are completely skipped when generating the rota.</div>
+      <div class="day-grid">
+        ${DAYS.map((d,i)=>{
+          const isOut=dayOut.has(d);
+          return `<button
+            style="padding:6px 11px;border-radius:20px;border:1px solid ${isOut?"#c05050":"#2a3045"};background:${isOut?"#3a1515":"transparent"};color:${isOut?"#e08080":"#5a6070"};font-size:.74rem;font-family:'Source Sans 3',sans-serif;cursor:pointer"
+            onclick="toggleDayOut('${d}')">
+            ${DS[i]}${isOut?" 🏖":""}
+          </button>`;
+        }).join("")}
+      </div>
+      ${dayOut.size>0?`<div style="margin-top:8px;font-size:.74rem;color:#e08080">No work on: <strong>${[...dayOut].join(", ")}</strong></div>`:""}
+    </div>
     <div class="exc-box">
       <div class="exc-hdr">📌 Fixed assignment — pin a person to a specific job &amp; day</div>
       <div class="exc-form">
@@ -941,6 +960,7 @@ function renderRota(){
 function renderRotaTable(){
   const rows=JOBS.filter(j=>!["Security","Laundry"].includes(j.name)&&j.days[0]!=="WEEK").map(job=>{
     const cells=DAYS.map((day,di)=>{
+      if(dayOut.has(day)) return `<td style="background:#0d0f14;text-align:center"><span style="color:#2a2e38;font-size:.7rem">day out</span></td>`;
       if(!job.days.includes(day)) return `<td class="off"><span style="color:#1a1d24">·</span></td>`;
       const names=(rota.days[day]||{})[job.name]?.filter(x=>x!=="—")||[];
       let inner="";
@@ -959,7 +979,7 @@ function renderRotaTable(){
       ${cells}</tr>`;
   }).join("");
   return `<div class="rota-wrap"><table class="rota-table">
-    <thead><tr><th class="jc">Job</th>${DS.map(d=>`<th>${d}</th>`).join("")}</tr></thead>
+    <thead><tr><th class="jc">Job</th>${DS.map((d,i)=>`<th style="${dayOut.has(DAYS[i])?"color:#3a4050;background:#0d0f14":""}">${d}${dayOut.has(DAYS[i])?" 🏖":""}</th>`).join("")}</tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
@@ -1095,6 +1115,11 @@ function toggleAppr(name,job){
   const btn=document.querySelector(`[data-appr="${name}|${job}"]`);
   if(btn) btn.className=`jtog ${p.apprentice.includes(job)?"learning":""}`;
 }
+function toggleDayOut(day){
+  if(dayOut.has(day)) dayOut.delete(day); else dayOut.add(day);
+  render();
+}
+
 function addException(){
   const day=document.getElementById("exc-day")?.value;
   const job=document.getElementById("exc-job")?.value;
