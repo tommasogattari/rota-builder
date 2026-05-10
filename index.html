@@ -250,6 +250,8 @@ let rotaWeek = "";
 let dayOut = new Set(); // days with no work — completely skipped when generating
 let viewTab = "jobs";
 let editTarget = null;
+let blocked = [];     // [{person, day, job}] — person cannot do job on that day
+let preferred = [];   // [{personA, personB}] — prefer A+B as Server1+Server2 same day
 const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -259,7 +261,7 @@ function load() {
   try { const v = localStorage.getItem(HK); if(v) history = JSON.parse(v); } catch(_){}
   try {
     const v = localStorage.getItem(RK);
-    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); exceptions=d.exceptions||[]; incompatible=d.incompatible||[]; }
+    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); exceptions=d.exceptions||[]; incompatible=d.incompatible||[]; blocked=d.blocked||[]; preferred=d.preferred||[]; }
   } catch(_){}
   // Ensure all people have required fields
   people = people.map(p=>({...p, apprentice:p.apprentice||[], restrictions:p.restrictions||[]}));
@@ -267,12 +269,12 @@ function load() {
 function savePeople() { localStorage.setItem(PK, JSON.stringify(people)); }
 function saveHistory() { localStorage.setItem(HK, JSON.stringify(history)); }
 function saveRota() {
-  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes,rotaWeek,dayOut:[...dayOut],exceptions,incompatible}));
+  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes,rotaWeek,dayOut:[...dayOut],exceptions,incompatible,blocked,preferred}));
 }
 
 // Export full state (rota + people + history) as JSON file for import on other devices
 function exportJSON(){
-  const data={people,history,rota,notes,rotaWeek,dayOut:[...dayOut],exceptions,incompatible,version:2};
+  const data={people,history,rota,notes,rotaWeek,dayOut:[...dayOut],exceptions,incompatible,blocked,preferred,version:2};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
   const url=URL.createObjectURL(blob);
   const a=document.createElement("a");
@@ -297,6 +299,8 @@ function importJSON(){
         if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); }
         if(d.exceptions) exceptions=d.exceptions; else exceptions=[];
         if(d.incompatible) incompatible=d.incompatible; else incompatible=[];
+        if(d.blocked) blocked=d.blocked; else blocked=[];
+        if(d.preferred) preferred=d.preferred; else preferred=[];
         savePeople();saveHistory();saveRota();
         step=rota?3:0;
         render();
@@ -385,6 +389,9 @@ function generateRota(){
   const isAvail=(n,d)=>{const p=people.find(x=>x.name===n);return!!(p&&p.availability[d]!==false);};
   const isAH   =(n,d)=>{const p=people.find(x=>x.name===n);return!!(p&&p.availability[d]==="AH");};
 
+  // Is this person blocked from this job on this day? (day-specific block exception)
+  const isBlocked=(n,d,job)=>blocked.some(b=>b.person===n&&b.day===d&&b.job===job);
+
   // All jobs assigned to person today
   const todayJobs=(n,d)=>dayJobs[n][d];
 
@@ -458,9 +465,24 @@ function generateRota(){
     }
     const lightBonus=availCnt[n]<=3?-(JOBS.find(j=>j.name===job)?.w||1)*2:0;
     const hist=histMap[n]||{};
-    const histJobPen=hist[job]||0;             // penalità per aver fatto questo job nelle ultime settimane
-    const histDayPen=(hist[`${job}@${d}`]||0)*1.5; // penalità extra: stesso job, stesso giorno della settimana
-    return ww[n]/availCnt[n]+weekRepPen+(histJobPen+histDayPen)*18+acolPen+ahPen+srvPen+lightBonus+Math.random()*8;
+    const histJobPen=hist[job]||0;
+    const histDayPen=(hist[`${job}@${d}`]||0)*1.5;
+
+    // Preferred-pair bonus for Server 1 / Server 2
+    let prefBonus=0;
+    if(job==="Bell/Server 1"||job==="Server 2"){
+      const partner=preferred.find(pp=>pp.personA===n||pp.personB===n);
+      if(partner){
+        const other=partner.personA===n?partner.personB:partner.personA;
+        const otherSlot=job==="Bell/Server 1"?"Server 2":"Bell/Server 1";
+        const alreadyThere=(res.days[d][otherSlot]||[]).includes(other);
+        const couldBeThere=!alreadyThere&&isAvail(other,d)&&!isBlocked(other,d,otherSlot)&&!(people.find(x=>x.name===other)?.restrictions||[]).includes(otherSlot);
+        if(alreadyThere) prefBonus=-40;       // partner already in the other slot — strong pull
+        else if(couldBeThere) prefBonus=-18;  // partner could fill it — moderate pull
+      }
+    }
+
+    return ww[n]/availCnt[n]+weekRepPen+(histJobPen+histDayPen)*18+acolPen+ahPen+srvPen+lightBonus+prefBonus+Math.random()*8;
   };
 
   // Core assign
@@ -478,6 +500,7 @@ function generateRota(){
     if(todayJobs(n,d).length!==0)return false;
     const p=people.find(x=>x.name===n);
     if((p.restrictions||[]).includes(job))return false;
+    if(isBlocked(n,d,job))return false;
     // Person is idle so soloConflict/pairConflict are always false — skip them
     if(incompatConflict(n,d,job))return false;
     if(!ignoreConsec&&didYesterday(n,job,d))return false;
@@ -497,6 +520,7 @@ function generateRota(){
     if(!isAvail(n,d))return false;
     const p=people.find(x=>x.name===n);
     if((p.restrictions||[]).includes(job))return false;
+    if(isBlocked(n,d,job))return false;
     if(pairConflict(n,d,job))return false;
     if(incompatConflict(n,d,job))return false;
     if(!doubleAllowed(todayJobs(n,d),job,d))return false;
@@ -994,6 +1018,65 @@ function renderExceptions(){
       :`<div style="font-size:.71rem;color:#3a4050;margin-top:6px">No incompatible pairs.</div>`}
     </div>
 
+    <!-- Day-specific block -->
+    <div class="exc-box" style="margin-top:12px">
+      <div class="exc-hdr">⛔ Day block — person cannot do a job on a specific day</div>
+      <div style="font-size:.72rem;color:#6a7080;margin-bottom:10px">
+        Different from a restriction (which is permanent): this only applies to one day this week.
+      </div>
+      <div class="exc-form">
+        <div class="exc-form-row">
+          <span class="exc-lbl">Person:</span>
+          <select class="input" id="blk-person" style="flex:1">${pplOpts}</select>
+        </div>
+        <div class="exc-form-row">
+          <span class="exc-lbl">cannot do</span>
+          <select class="input" id="blk-job" style="flex:1">${jobOpts}</select>
+        </div>
+        <div class="exc-form-row">
+          <span class="exc-lbl">on</span>
+          <select class="input" id="blk-day" style="flex:1">${dayOpts}</select>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="addBlocked()" style="align-self:flex-start">Add</button>
+      </div>
+      ${blocked.length>0?`<div class="exc-chips" style="margin-top:10px">${blocked.map((b,i)=>`
+        <div class="exc-chip">
+          <span style="color:${personColour(b.person)};font-weight:700">${b.person}</span>
+          <span style="color:#5a6070;font-size:.7rem"> ⛔ ${b.job} on </span>
+          <strong>${b.day}</strong>
+          <button class="btn btn-danger" style="padding:1px 6px;font-size:.66rem;margin-left:4px" onclick="removeBlocked(${i})">✕</button>
+        </div>`).join("")}</div>`
+      :`<div style="font-size:.71rem;color:#3a4050;margin-top:6px">No day blocks.</div>`}
+    </div>
+
+    <!-- Preferred server pair -->
+    <div class="exc-box" style="margin-top:12px">
+      <div class="exc-hdr">🤝 Preferred server pair — favour two people as Server 1 + Server 2</div>
+      <div style="font-size:.72rem;color:#6a7080;margin-bottom:10px">
+        The algorithm will try to schedule these two as Bell/Server 1 and Server 2 on the same day at least once this week. It's a soft preference — other rules still take priority.
+      </div>
+      <div class="exc-form">
+        <div class="exc-form-row">
+          <span class="exc-lbl">Person A:</span>
+          <select class="input" id="pref-a" style="flex:1">${pplOpts}</select>
+        </div>
+        <div class="exc-form-row">
+          <span class="exc-lbl">pairs with</span>
+          <select class="input" id="pref-b" style="flex:1">${pplOpts}</select>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="addPreferred()" style="align-self:flex-start">Add</button>
+      </div>
+      ${preferred.length>0?`<div class="exc-chips" style="margin-top:10px">${preferred.map((pp,i)=>`
+        <div class="exc-chip">
+          <span style="color:${personColour(pp.personA)};font-weight:700">${pp.personA}</span>
+          <span style="color:#4a9a6a;font-size:.8rem"> 🤝 </span>
+          <span style="color:${personColour(pp.personB)};font-weight:700">${pp.personB}</span>
+          <span style="color:#5a6070;font-size:.68rem"> (Server 1 &amp; 2)</span>
+          <button class="btn btn-danger" style="padding:1px 6px;font-size:.66rem;margin-left:4px" onclick="removePreferred(${i})">✕</button>
+        </div>`).join("")}</div>`
+      :`<div style="font-size:.71rem;color:#3a4050;margin-top:6px">No preferred pairs.</div>`}
+    </div>
+
     <div class="nav-row">
       <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
       <button class="btn btn-gold btn-lg" onclick="doGenerate()">Generate Rota →</button>
@@ -1274,6 +1357,29 @@ function addIncompatible(){
   saveRota();render();
 }
 function removeIncompatible(i){incompatible.splice(i,1);saveRota();render();}
+
+function addBlocked(){
+  const person=document.getElementById("blk-person")?.value;
+  const job=document.getElementById("blk-job")?.value;
+  const day=document.getElementById("blk-day")?.value;
+  if(!person||!job||!day)return;
+  const already=blocked.some(b=>b.person===person&&b.day===day&&b.job===job);
+  if(already)return;
+  blocked.push({person,day,job});
+  saveRota();render();
+}
+function removeBlocked(i){blocked.splice(i,1);saveRota();render();}
+
+function addPreferred(){
+  const a=document.getElementById("pref-a")?.value;
+  const b=document.getElementById("pref-b")?.value;
+  if(!a||!b||a===b)return;
+  const already=preferred.some(pp=>(pp.personA===a&&pp.personB===b)||(pp.personA===b&&pp.personB===a));
+  if(already)return;
+  preferred.push({personA:a,personB:b});
+  saveRota();render();
+}
+function removePreferred(i){preferred.splice(i,1);saveRota();render();}
 
 function doGenerate(){
   rota=generateRota();
