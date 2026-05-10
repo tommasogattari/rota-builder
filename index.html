@@ -229,9 +229,10 @@ const JOBS = [
   {name:"Telephone",          w:1, days:DAYS},
   {name:"Security",           w:3, days:["WEEK"]},
 ];
-const SOLO      = new Set(["Bell/Server 1","Server 2","Acolyte/Sacristan","Cantor/Psalmist"]);
-const TEL_GOOD  = new Set(["Reader","Scullery","Bread","Laundry"]);
-const TEL_BAD   = "Water & Dishwasher";
+const SOLO      = new Set(["Bell/Server 1","Server 2","Acolyte/Sacristan","Cantor/Psalmist"]); // UI tag colouring only
+// HARD_SOLO: jobs whose holders NEVER get a second job that day (algorithm rule)
+// Acolyte/Sacristan and Reader on Sun/Mon are also exclusive but handled inline.
+const HARD_SOLO = new Set(["Bell/Server 1","Server 2","Cantor/Psalmist"]);
 const CONFLICTS = [["Scullery","Water & Dishwasher"]];
 const FIXED_NOTES = {Monday:"Rubbish",Tuesday:"Recycling",Thursday:"Rubbish"};
 const HK = "rota-history-v2", PK = "rota-people-v2", RK = "rota-current-v2";
@@ -246,7 +247,7 @@ let notes = {...FIXED_NOTES};
 let exceptions = [];
 let incompatible = [];
 let rotaWeek = "";
-let dayOut = new Set(); // days with no work (day out) // ISO date string of Monday for the rota week
+let dayOut = new Set(); // days with no work — completely skipped when generating
 let viewTab = "jobs";
 let editTarget = null;
 const STEP_LABELS = ["People","Settings","Exceptions","Generate","History"];
@@ -258,7 +259,7 @@ function load() {
   try { const v = localStorage.getItem(HK); if(v) history = JSON.parse(v); } catch(_){}
   try {
     const v = localStorage.getItem(RK);
-    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); }
+    if(v){ const d=JSON.parse(v); rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); exceptions=d.exceptions||[]; incompatible=d.incompatible||[]; }
   } catch(_){}
   // Ensure all people have required fields
   people = people.map(p=>({...p, apprentice:p.apprentice||[], restrictions:p.restrictions||[]}));
@@ -266,7 +267,7 @@ function load() {
 function savePeople() { localStorage.setItem(PK, JSON.stringify(people)); }
 function saveHistory() { localStorage.setItem(HK, JSON.stringify(history)); }
 function saveRota() {
-  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes,rotaWeek,dayOut:[...dayOut]}));
+  if(rota) localStorage.setItem(RK, JSON.stringify({rota,notes,rotaWeek,dayOut:[...dayOut],exceptions,incompatible}));
 }
 
 // Export full state (rota + people + history) as JSON file for import on other devices
@@ -294,8 +295,8 @@ function importJSON(){
         if(d.people) people=d.people.map(p=>({...p,apprentice:p.apprentice||[],restrictions:p.restrictions||[]}));
         if(d.history) history=d.history;
         if(d.rota){ rota=d.rota; notes=d.notes||{...FIXED_NOTES}; rotaWeek=d.rotaWeek||""; dayOut=new Set(d.dayOut||[]); }
-        if(d.exceptions) exceptions=d.exceptions;
-        if(d.incompatible) incompatible=d.incompatible;
+        if(d.exceptions) exceptions=d.exceptions; else exceptions=[];
+        if(d.incompatible) incompatible=d.incompatible; else incompatible=[];
         savePeople();saveHistory();saveRota();
         step=rota?3:0;
         render();
@@ -309,13 +310,39 @@ function importJSON(){
 
 // ── Algorithm ─────────────────────────────────────────────────────────────────
 function buildHistMap() {
+  // Returns {name: {job: weight, "job@Day": weight}} where @Day entries penalise
+  // the same job on the same weekday more heavily than just any repetition.
   const map={};
   history.slice(-HW).forEach((wk,wi)=>{
-    const rec=(wi+1)/HW;
-    Object.entries(wk.assignments||{}).forEach(([name,jobs])=>{
-      if(!map[name])map[name]={};
-      (jobs||[]).forEach(j=>{map[name][j]=(map[name][j]||0)+rec;});
+    const rec=(wi+1)/HW; // older weeks count less (1/4 → 4/4)
+    const r=wk.rota||{}; // new format: full rota object
+    // Support old format (wk.assignments = {name:[job,...]}) for backwards compatibility
+    if(!r.days&&wk.assignments){
+      Object.entries(wk.assignments).forEach(([name,jobs])=>{
+        if(!map[name])map[name]={};
+        (jobs||[]).forEach(j=>{map[name][j]=(map[name][j]||0)+rec;});
+      });
+      return;
+    }
+    // New format: iterate days so we know the exact day each job was done
+    if(!r.days)return; // rota incompleta, salta
+    DAYS.forEach(day=>{
+      Object.entries(r.days?.[day]||{}).forEach(([job,names])=>{
+        (names||[]).forEach(name=>{
+          if(!name||name==="—")return;
+          if(!map[name])map[name]={};
+          map[name][job]=(map[name][job]||0)+rec;
+          // Extra penalty for same job on same weekday
+          const key=`${job}@${day}`;
+          map[name][key]=(map[name][key]||0)+rec;
+        });
+      });
     });
+    // Security
+    if(r.Security){
+      if(!map[r.Security])map[r.Security]={};
+      map[r.Security]["Security"]=(map[r.Security]["Security"]||0)+rec;
+    }
   });
   return map;
 }
@@ -335,7 +362,7 @@ function generateRota(){
   people.forEach(p=>{ww[p.name]=0;wd[p.name]={};});
 
   // Per-day slots: what each person is doing today
-  // dayJobs[name][day] = string[]  (list of jobs, may be >1 only if double-assigned)
+  // dayJobs[name][day] = string[]  (max 2 only for permitted combos)
   const dayJobs={};
   people.forEach(p=>{dayJobs[p.name]={};DAYS.forEach(d=>{dayJobs[p.name][d]=[];});});
 
@@ -347,7 +374,6 @@ function generateRota(){
   // Hard cap: no job more than 2× per week (except Telephone which can go up to 3)
   const MAX_JOB=2, MAX_TEL=3;
   // Server group: Bell/Server1 + Server2 treated as one group, cap 2 total per week
-  // and strongly prefer alternating between them rather than repeating the same one.
   const serverGroupCount=(n)=>(wd[n]["Bell/Server 1"]||0)+(wd[n]["Server 2"]||0);
   const MAX_SERVER_GROUP=2;
 
@@ -362,19 +388,35 @@ function generateRota(){
   // All jobs assigned to person today
   const todayJobs=(n,d)=>dayJobs[n][d];
 
-  // Does person already have ANY solo-type job today?
-  const hasSoloToday=(n,d)=>todayJobs(n,d).some(j=>SOLO.has(j)||(isReaderExcl(d)&&j==="Reader"));
+  // Does person already have a HARD_SOLO or exclusive (Acolyte/Reader Sun-Mon) job today?
+  const hasSoloToday=(n,d)=>todayJobs(n,d).some(j=>HARD_SOLO.has(j)||(isReaderExcl(d)&&j==="Reader")||j==="Acolyte/Sacristan");
 
-  // Would assigning `job` today violate the SOLO rule?
-  // Rule: SOLO jobs cannot share a day with ANY other job (for that person)
+  // Would assigning `job` conflict with the hard-solo rule?
   const soloConflict=(n,d,job)=>{
     const existing=todayJobs(n,d);
     if(existing.length===0)return false;
-    // new job is solo → already has something → conflict
-    if(SOLO.has(job)||(isReaderExcl(d)&&job==="Reader"))return true;
-    // existing job is solo → cannot add anything
+    // new job is hard-solo or exclusive → already has something → conflict
+    if(HARD_SOLO.has(job)||(isReaderExcl(d)&&job==="Reader")||job==="Acolyte/Sacristan")return true;
+    // existing job is hard-solo or exclusive → cannot add anything
     if(hasSoloToday(n,d))return true;
     return false;
+  };
+
+  // Is doubling allowed for this person/job/day?
+  // Any job that is not hard-solo and not exclusive is eligible as a second job.
+  // The only restriction is: HARD_SOLO holders never get a second job,
+  // and Acolyte/Sacristan or Reader on Sun/Mon are never doubled.
+  const doubleAllowed=(existingJobs, newJob, d)=>{
+    // The new job itself must not be exclusive
+    if(HARD_SOLO.has(newJob))return false;
+    if(newJob==="Acolyte/Sacristan")return false;
+    if(isReaderExcl(d)&&newJob==="Reader")return false;
+    // The existing job must not be exclusive/hard-solo
+    if(existingJobs.some(j=>HARD_SOLO.has(j)||j==="Acolyte/Sacristan"||(isReaderExcl(d)&&j==="Reader")))return false;
+    // Scullery and Water & Dishwasher cannot be held by the same person
+    if(existingJobs.includes("Scullery")&&newJob==="Water & Dishwasher")return false;
+    if(existingJobs.includes("Water & Dishwasher")&&newJob==="Scullery")return false;
+    return true;
   };
 
   // Pairwise job conflicts (Scullery+Water)
@@ -406,19 +448,19 @@ function generateRota(){
     const isAcolEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
     const acolPen=isAcolEquiv?acolyteCnt[n]*12:0;
     const ahPen=(isAH(n,d)&&(job==="Reader"||job==="Acolyte/Sacristan"))?25:0;
-    // Server group variety: penalise heavily if already did the SAME server role this week.
-    // Extra penalty if they did the OTHER server role (prefer alternating, not repeating same).
     let srvPen=0;
     if(job==="Bell/Server 1"){
-      srvPen=(wd[n]["Bell/Server 1"]||0)*20;  // already did Srv1 → strong discourage
-      if((wd[n]["Server 2"]||0)>0)srvPen+=5;  // also did Srv2 → slight extra
+      srvPen=(wd[n]["Bell/Server 1"]||0)*20;
+      if((wd[n]["Server 2"]||0)>0)srvPen+=5;
     } else if(job==="Server 2"){
-      srvPen=(wd[n]["Server 2"]||0)*20;        // already did Srv2 → strong discourage
+      srvPen=(wd[n]["Server 2"]||0)*20;
       if((wd[n]["Bell/Server 1"]||0)>0)srvPen+=5;
     }
-    // Bonus for people with few available days getting heavy jobs
     const lightBonus=availCnt[n]<=3?-(JOBS.find(j=>j.name===job)?.w||1)*2:0;
-    return ww[n]/availCnt[n]+weekRepPen+((histMap[n]||{})[job]||0)*18+acolPen+ahPen+srvPen+lightBonus+Math.random()*8;
+    const hist=histMap[n]||{};
+    const histJobPen=hist[job]||0;             // penalità per aver fatto questo job nelle ultime settimane
+    const histDayPen=(hist[`${job}@${d}`]||0)*1.5; // penalità extra: stesso job, stesso giorno della settimana
+    return ww[n]/availCnt[n]+weekRepPen+(histJobPen+histDayPen)*18+acolPen+ahPen+srvPen+lightBonus+Math.random()*8;
   };
 
   // Core assign
@@ -430,18 +472,17 @@ function generateRota(){
     if(job==="Bread")breadA[d]=n;
   };
 
-  // ── canDo: strict check (no double-job allowed) ───────────────────────────
+  // ── canDo: person must be IDLE today (0 jobs). Primary assignment only. ──
   const canDo=(n,d,job,{ignoreConsec=false,ignoreCap=false,ignoreAcolCap=false}={})=>{
     if(!isAvail(n,d))return false;
+    if(todayJobs(n,d).length!==0)return false;
     const p=people.find(x=>x.name===n);
     if((p.restrictions||[]).includes(job))return false;
-    if(soloConflict(n,d,job))return false;
-    if(pairConflict(n,d,job))return false;
+    // Person is idle so soloConflict/pairConflict are always false — skip them
     if(incompatConflict(n,d,job))return false;
     if(!ignoreConsec&&didYesterday(n,job,d))return false;
     const maxAllowed=job==="Telephone"?MAX_TEL:MAX_JOB;
     if(!ignoreCap&&(wd[n][job]||0)>=maxAllowed)return false;
-    // Server group cap: no more than 2 server roles total per week
     const isServerJob=job==="Bell/Server 1"||job==="Server 2";
     if(!ignoreCap&&isServerJob&&serverGroupCount(n)>=MAX_SERVER_GROUP)return false;
     const isAcolEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
@@ -449,37 +490,36 @@ function generateRota(){
     return true;
   };
 
-  // canDoDouble: person already has a job today — can they take a second?
-  // Only allowed for non-SOLO jobs and only if they don't already have a SOLO job
+  // canDoDouble: person already has exactly 1 job — can they take a second?
   const canDoDouble=(n,d,job,opts={})=>{
-    if(SOLO.has(job)||(isReaderExcl(d)&&job==="Reader"))return false; // SOLO never doubled
-    if(hasSoloToday(n,d))return false; // already has solo job
+    if(todayJobs(n,d).length!==1)return false;
+    if(hasSoloToday(n,d))return false;
     if(!isAvail(n,d))return false;
     const p=people.find(x=>x.name===n);
     if((p.restrictions||[]).includes(job))return false;
     if(pairConflict(n,d,job))return false;
     if(incompatConflict(n,d,job))return false;
+    if(!doubleAllowed(todayJobs(n,d),job,d))return false;
     if(!opts.ignoreConsec&&didYesterday(n,job,d))return false;
     const maxAllowed=job==="Telephone"?MAX_TEL:MAX_JOB;
     if(!opts.ignoreCap&&(wd[n][job]||0)>=maxAllowed)return false;
+    // Reader non-esclusivo conta comunque verso il cap acolyte se combinato
+    const isAcolEquiv=(job==="Acolyte/Sacristan")||(isReaderExcl(d)&&job==="Reader");
+    if(!opts.ignoreCap&&isAcolEquiv&&acolyteCnt[n]>=MAX_ACOL)return false;
     return true;
   };
 
-  // pickOne: tries progressively relaxed passes until someone is found
+  // pickOne: only picks IDLE people. No doubles here — that is gap filler's job.
   const pickOne=(job,d,{excl=null}={})=>{
     const passes=[
-      // ideal: free slot, no consec, within all caps
-      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,job),
-      // free slot, allow consec
-      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,job,{ignoreConsec:true}),
-      // free slot, allow consec + ignore acolyte cap
-      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,job,{ignoreConsec:true,ignoreAcolCap:true}),
-      // double-job, no consec
-      p=>canDoDouble(p.name,d,job),
-      // double-job, allow consec
-      p=>canDoDouble(p.name,d,job,{ignoreConsec:true}),
-      // double-job, ignore all caps
-      p=>canDoDouble(p.name,d,job,{ignoreConsec:true,ignoreCap:true}),
+      // ideal: idle, no consec, all caps
+      p=>canDo(p.name,d,job),
+      // idle, allow consec
+      p=>canDo(p.name,d,job,{ignoreConsec:true}),
+      // idle, allow consec + ignore acolyte cap
+      p=>canDo(p.name,d,job,{ignoreConsec:true,ignoreAcolCap:true}),
+      // idle, ignore all caps (absolute last resort for primary assignment)
+      p=>canDo(p.name,d,job,{ignoreConsec:true,ignoreCap:true,ignoreAcolCap:true}),
     ];
     for(const pass of passes){
       const c=people.filter(p=>p.name!==excl&&pass(p));
@@ -495,6 +535,7 @@ function generateRota(){
     const c=people.filter(p=>{
       if(p.name===appr||!isAvail(p.name,d))return false;
       if((p.restrictions||[]).includes(job)||(p.apprentice||[]).includes(job))return false;
+      if(todayJobs(p.name,d).length!==0)return false; // trainer must be idle
       return true;
     });
     if(!c.length)return null;
@@ -503,27 +544,58 @@ function generateRota(){
   };
 
   const assignJob=(job,d)=>{
-    if(res.days[d][job])return; // already set by exception
-    const n=pickOne(job,d);
+    // Already filled by a valid assignment (not a "—" placeholder)
+    const existing=res.days[d][job];
+    if(existing&&existing.length>0&&!existing.includes("—"))return;
+    let n=pickOne(job,d);
     if(n){
       const p=people.find(x=>x.name===n);
       if((p?.apprentice||[]).includes(job)){
         const tr=findTrainer(n,job,d);
         res.days[d][job]=tr?[n,tr]:[n];
         if(tr)doAssign(tr,d,job);
-        // KEY: if apprentice is paired with a trainer, the apprentice is NOT
-        // treated as having a solo job — they can still receive a second lighter job.
-        // We do NOT call doAssign for n here when paired, so their dayJobs stays
-        // reflecting only the apprentice assignment (already done inside pickOne).
+        return;
+      }
+      res.days[d][job]=[n];
+      return;
+    }
+    // No idle person available — try doubling onto an existing 1-job person.
+    // Only non-exclusive jobs can be doubled (HARD_SOLO and Acolyte/Reader Sun-Mon cannot).
+    const isExcl=HARD_SOLO.has(job)||job==="Acolyte/Sacristan"||(isReaderExcl(d)&&job==="Reader");
+    if(!isExcl){
+      const doublePasses=[
+        // prefer Telephone holder, then Scullery, then Water, then anyone — no consec
+        p=>todayJobs(p.name,d).includes("Telephone")&&canDoDouble(p.name,d,job),
+        p=>todayJobs(p.name,d).includes("Scullery")&&canDoDouble(p.name,d,job),
+        p=>todayJobs(p.name,d).includes("Water & Dishwasher")&&canDoDouble(p.name,d,job),
+        p=>canDoDouble(p.name,d,job),
+        // allow consec as fallback
+        p=>canDoDouble(p.name,d,job,{ignoreConsec:true}),
+        // ignore caps as last resort
+        p=>canDoDouble(p.name,d,job,{ignoreConsec:true,ignoreCap:true}),
+      ];
+      for(const pass of doublePasses){
+        const c=people.filter(pass);
+        if(!c.length)continue;
+        c.sort((a,b)=>score(a.name,job,d)-score(b.name,job,d));
+        doAssign(c[0].name,d,job);
+        res.days[d][job]=[c[0].name];
         return;
       }
     }
-    res.days[d][job]=n?[n]:["—"];
+    res.days[d][job]=["—"];
   };
 
   // ── 0. Pre-assigned exceptions ──────────────────────────────────────────
   (exceptions||[]).forEach(ex=>{
-    if(!ex.day||!ex.job||!ex.person||!isAvail(ex.person,ex.day))return;
+    if(!ex.day||!ex.job||!ex.person)return;
+    if(!isAvail(ex.person,ex.day))return;
+    // Skip if this person already has a conflicting job today (e.g. another exception)
+    if(soloConflict(ex.person,ex.day,ex.job))return;
+    if(pairConflict(ex.person,ex.day,ex.job))return;
+    // Skip if slot already filled by an earlier exception
+    const existing=res.days[ex.day][ex.job];
+    if(existing&&existing.length>0&&!existing.includes("—"))return;
     doAssign(ex.person,ex.day,ex.job);
     res.days[ex.day][ex.job]=[ex.person];
   });
@@ -536,6 +608,7 @@ function generateRota(){
   // ── 2. ALL SOLO/exclusive jobs first, day by day ────────────────────────
   DAYS.forEach(d=>{
     if(dayOut.has(d))return;
+    // Hard-solo jobs + Acolyte/Sacristan (exclusive) + Reader on exclusive days
     const soloThisDay=["Bell/Server 1","Server 2","Cantor/Psalmist","Acolyte/Sacristan"];
     if(isReaderExcl(d))soloThisDay.push("Reader");
     soloThisDay.forEach(job=>assignJob(job,d));
@@ -558,6 +631,7 @@ function generateRota(){
       if(!isAvail(n,d))return false;
       if(soloConflict(n,d,"Laundry"))return false;
       if(pairConflict(n,d,"Laundry"))return false;
+      if(todayJobs(n,d).length>=2)return false; // never give a 3rd job
       return true;
     });
     today.forEach(n=>doAssign(n,d,"Laundry"));
@@ -576,26 +650,33 @@ function generateRota(){
     res.days[d]["Bread"]=n?[n]:["—"];
   });
 
-  // ── 6. Telephone — always assigned, 1 person, tiered ───────────────────
+  // ── 6. Telephone — always assigned, 1 person ───────────────────────────
+  // Try idle first. If no idle person, give it as a second job in priority order:
+  //   Telephone is already assigned (skip), then Scullery holder, then Water holder,
+  //   then anyone with 1 non-solo job.
   DAYS.forEach(d=>{
     if(dayOut.has(d))return;
     if(res.days[d]["Telephone"]&&!res.days[d]["Telephone"].includes("—"))return;
 
     const telPasses=[
-      // ideal: idle person (no jobs today), no consec
+      // Pass 1: idle, no consec
       p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,"Telephone"),
-      // idle, allow consec
+      // Pass 2: idle, allow consec
       p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,"Telephone",{ignoreConsec:true}),
-      // good pair (Reader/Scullery), no consec
-      p=>todayJobs(p.name,d).some(j=>TEL_GOOD.has(j))&&canDoDouble(p.name,d,"Telephone"),
-      // good pair, allow consec
-      p=>todayJobs(p.name,d).some(j=>TEL_GOOD.has(j))&&canDoDouble(p.name,d,"Telephone",{ignoreConsec:true}),
-      // water pair (discouraged), no consec
-      p=>todayJobs(p.name,d).includes(TEL_BAD)&&canDoDouble(p.name,d,"Telephone"),
-      // anyone available, no consec
-      p=>canDoDouble(p.name,d,"Telephone")||(todayJobs(p.name,d).length===0&&canDo(p.name,d,"Telephone",{ignoreConsec:true,ignoreCap:true})),
-      // absolute last resort: ignore cap and consec
-      p=>isAvail(p.name,d)&&!isAH(p.name,d)&&!hasSoloToday(p.name,d)&&!(people.find(x=>x.name===p.name).restrictions||[]).includes("Telephone"),
+      // Pass 3: idle, ignore all caps
+      p=>todayJobs(p.name,d).length===0&&canDo(p.name,d,"Telephone",{ignoreConsec:true,ignoreCap:true}),
+      // Pass 4: Scullery holder as second job, no consec
+      p=>todayJobs(p.name,d).includes("Scullery")&&canDoDouble(p.name,d,"Telephone"),
+      // Pass 5: Water holder as second job, no consec
+      p=>todayJobs(p.name,d).includes("Water & Dishwasher")&&canDoDouble(p.name,d,"Telephone"),
+      // Pass 6: Scullery or Water, allow consec
+      p=>(todayJobs(p.name,d).includes("Scullery")||todayJobs(p.name,d).includes("Water & Dishwasher"))&&canDoDouble(p.name,d,"Telephone",{ignoreConsec:true}),
+      // Pass 7: any 1-job non-solo person, allow consec
+      p=>canDoDouble(p.name,d,"Telephone",{ignoreConsec:true}),
+      // Pass 8: any 1-job non-solo, ignore all caps
+      p=>canDoDouble(p.name,d,"Telephone",{ignoreConsec:true,ignoreCap:true}),
+      // Pass 9: absolute last resort — any available non-solo person, no AH
+      p=>isAvail(p.name,d)&&!isAH(p.name,d)&&!hasSoloToday(p.name,d)&&todayJobs(p.name,d).length<2&&!(people.find(x=>x.name===p.name).restrictions||[]).includes("Telephone")&&(todayJobs(p.name,d).length===0||doubleAllowed(todayJobs(p.name,d),"Telephone",d)),
     ];
     for(const pass of telPasses){
       const c=people.filter(pass);
@@ -608,40 +689,56 @@ function generateRota(){
     res.days[d]["Telephone"]=["—"];
   });
 
-  // ── 7. Gap filler — no slot should stay "—" ────────────────────────────
-  // When a job can't be filled normally, add it to someone as a second job.
-  // Priority for who gets the extra work:
-  //   1. Someone idle (0 jobs today) — best option
-  //   2. Someone already doing Scullery — lightest job, easiest to combine
-  //   3. Someone already doing Water — second lightest
-  //   4. Anyone with exactly 1 job — last resort
-  // NEVER give a 3rd job to someone who already has 2.
-  // SOLO jobs (Server1/2, Cantor, Acolyte, Reader Sun/Mon) can only go to idle people.
+  // ── 7. Gap filler ──────────────────────────────────────────────────────
+  // Only runs when a slot is genuinely "—". Never gives anyone a 3rd job.
+  // Priority for who receives the extra work:
+  //   P1: idle person (0 jobs today) — always try this first
+  //   P2: person already doing Telephone
+  //   P3: person already doing Scullery
+  //   P4: person already doing Water & Dishwasher
+  //   P5: anyone else with exactly 1 non-solo job
+  // SOLO/exclusive gap jobs (Bell/Server1, Server2, Cantor, Acolyte, Reader Sun/Mon)
+  //   can only go to idle people — never doubled.
   const dailyJobs=JOBS.filter(j=>j.days[0]!=="WEEK"&&j.name!=="Security"&&j.name!=="Laundry");
 
   dailyJobs.forEach(jobDef=>{
     jobDef.days.forEach(d=>{
-      if(dayOut.has(d))return; // skip day out completely
+      if(dayOut.has(d))return;
+      const cur=res.days[d][jobDef.name];
       if(cur&&cur.length>0&&!cur.includes("—"))return;
 
+      const isExclusiveJob=HARD_SOLO.has(jobDef.name)||jobDef.name==="Acolyte/Sacristan"||(isReaderExcl(d)&&jobDef.name==="Reader");
       const restr=(n)=>people.find(x=>x.name===n)?.restrictions||[];
-      const physOk=(n)=>{
+
+      const idleOk=(n,{ignoreConsec=false}={})=>{
         if(!isAvail(n,d))return false;
         if(restr(n).includes(jobDef.name))return false;
+        if(todayJobs(n,d).length!==0)return false;
         if(pairConflict(n,d,jobDef.name))return false;
         if(incompatConflict(n,d,jobDef.name))return false;
-        if(hasSoloToday(n,d))return false;
-        if(todayJobs(n,d).length>=2)return false; // never 3 jobs
-        const isExclusiveJob=SOLO.has(jobDef.name)||(isReaderExcl(d)&&jobDef.name==="Reader");
-        if(isExclusiveJob&&todayJobs(n,d).length>0)return false;
+        if(!ignoreConsec&&didYesterday(n,jobDef.name,d))return false;
+        const maxAllowed=jobDef.name==="Telephone"?MAX_TEL:MAX_JOB;
+        if((wd[n][jobDef.name]||0)>=maxAllowed)return false;
+        const isServerJob=jobDef.name==="Bell/Server 1"||jobDef.name==="Server 2";
+        if(isServerJob&&serverGroupCount(n)>=MAX_SERVER_GROUP)return false;
+        const isAcolEquiv=(jobDef.name==="Acolyte/Sacristan")||(isReaderExcl(d)&&jobDef.name==="Reader");
+        if(isAcolEquiv&&acolyteCnt[n]>=MAX_ACOL)return false;
+        return true;
+      };
+
+      const doubleOk=(n)=>{
+        if(isExclusiveJob)return false;
+        if(!canDoDouble(n,d,jobDef.name,{ignoreConsec:true}))return false;
         return true;
       };
 
       const gapPasses=[
-        p=>physOk(p.name)&&todayJobs(p.name,d).length===0,                       // idle
-        p=>physOk(p.name)&&todayJobs(p.name,d).includes("Scullery"),              // scullery person
-        p=>physOk(p.name)&&todayJobs(p.name,d).includes("Water & Dishwasher"),    // water person
-        p=>physOk(p.name)&&todayJobs(p.name,d).length===1,                        // anyone with 1 job
+        p=>idleOk(p.name),                                                          // P1: idle, no consec
+        p=>idleOk(p.name,{ignoreConsec:true}),                                      // P2: idle, allow consec
+        p=>doubleOk(p.name)&&todayJobs(p.name,d).includes("Telephone"),             // P3: tel holder
+        p=>doubleOk(p.name)&&todayJobs(p.name,d).includes("Scullery"),              // P4: scullery
+        p=>doubleOk(p.name)&&todayJobs(p.name,d).includes("Water & Dishwasher"),    // P5: water
+        p=>doubleOk(p.name)&&todayJobs(p.name,d).length===1,                        // P6: any 1-job
       ];
 
       for(const pass of gapPasses){
@@ -1008,25 +1105,60 @@ function renderPersonView(pv){
 }
 
 function renderHistory(){
-  const items=[...history].reverse().map((wk,ri)=>{
-    const idx=history.length-1-ri;
-    const pills=Object.entries(wk.assignments||{}).map(([n,jobs])=>`<div class="hist-pill"><strong>${n}:</strong> ${jobs.join(", ")}</div>`).join("");
-    return `<div class="hist-wk">
-      <div class="hist-hdr">
-        <div><div class="hist-lbl">${wk.label}</div>${wk.security?`<div class="hist-sub">Security: ${wk.security} · Laundry: ${(wk.laundry||[]).join(" & ")}</div>`:""}
-        </div>
-        <button class="btn btn-danger" onclick="delHistory(${idx})">Delete</button>
-      </div>
-      <div class="hist-pills">${pills}</div>
-    </div>`;
-  }).join("");
-  return `
+  if(history.length===0) return `
     <div class="sec-title">Rota History</div>
-    <div class="sec-desc">Last ${HW} weeks influence future assignments. Older weeks count less.</div>
-    <div class="hist-panel">${history.length===0?`<div class="hist-empty">No history yet.</div>`:items}</div>
+    <div class="sec-desc">Le ultime ${HW} settimane influenzano i futuri turni. Le settimane più vecchie contano meno.</div>
+    <div class="hist-panel"><div class="hist-empty">No history yet.</div></div>
     <div class="hist-actions">
       <button class="btn btn-outline" onclick="goStep(3)">← Back</button>
-      ${history.length>0?`<button class="btn btn-danger" onclick="clearHistory()">Clear All</button>`:""}
+    </div>`;
+
+  const items=[...history].reverse().map((wk,ri)=>{
+    const idx=history.length-1-ri;
+    const r=wk.rota||{};
+    const days=r.days||{};
+
+    // Build read-only grid rows — same structure as renderRotaTable but no edit buttons
+    const rows=JOBS.filter(j=>!["Security","Laundry"].includes(j.name)&&j.days[0]!=="WEEK").map(job=>{
+      const cells=DAYS.map(day=>{
+        if(!job.days.includes(day)) return `<td class="off"><span style="color:#1a1d24">·</span></td>`;
+        const names=(days[day]||{})[job.name]?.filter(x=>x!=="—")||[];
+        if(!names.length) return `<td><span class="tag-empty">—</span></td>`;
+        const inner=names.map(n=>`<span style="display:inline-block;padding:1px 6px;border-radius:4px;background:${personColour(n)};color:#fff;font-weight:700;font-size:.68rem;margin:1px">${n}</span>`).join("");
+        return `<td>${inner}</td>`;
+      }).join("");
+      return `<tr class="${job.name==="Telephone"?"tel-row":""}">
+        <td class="jc" style="font-size:.7rem"><span class="wdots">${"●".repeat(job.w)}</span>${job.name}</td>
+        ${cells}</tr>`;
+    }).join("");
+
+    const grid=`<div class="rota-wrap" style="margin-top:8px"><table class="rota-table" style="font-size:.72rem">
+      <thead><tr><th class="jc">Job</th>${DS.map(d=>`<th>${d}</th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+
+    const secLaundry=`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:.72rem;color:#8a9090">
+      ${r.Security?`<span>🔒 Security: <strong style="color:#c9a84c">${r.Security}</strong></span>`:""}
+      ${(r.Laundry||[]).length?`<span>🧺 Laundry: <strong style="color:#c9a84c">${r.Laundry.join(" & ")}</strong></span>`:""}
+    </div>`;
+
+    return `<div class="hist-wk">
+      <div class="hist-hdr">
+        <div class="hist-lbl">${wk.label}</div>
+        <button class="btn btn-danger" onclick="delHistory(${idx})">Delete</button>
+      </div>
+      ${secLaundry}
+      ${grid}
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="sec-title">Rota History</div>
+    <div class="sec-desc">Le ultime ${HW} settimane influenzano i futuri turni. Le settimane più vecchie contano meno.</div>
+    <div class="hist-panel">${items}</div>
+    <div class="hist-actions">
+      <button class="btn btn-outline" onclick="goStep(3)">← Back</button>
+      <button class="btn btn-danger" onclick="clearHistory()">Clear All</button>
       <span class="hist-cnt">${history.length} week${history.length!==1?"s":""} stored</span>
     </div>`;
 }
@@ -1124,23 +1256,24 @@ function addException(){
   const day=document.getElementById("exc-day")?.value;
   const job=document.getElementById("exc-job")?.value;
   const person=document.getElementById("exc-person")?.value;
-  if(!person)return;
+  if(!person||!day||!job)return;
+  const jobDef=JOBS.find(j=>j.name===job);
+  if(jobDef&&!jobDef.days.includes(day)&&jobDef.days[0]!=="WEEK")return; // job not valid this day
   exceptions.push({day,job,person});
-  render();
+  saveRota();render();
 }
-function removeException(i){exceptions.splice(i,1);render();}
+function removeException(i){exceptions.splice(i,1);saveRota();render();}
 
 function addIncompatible(){
   const a=document.getElementById("inc-a")?.value;
   const b=document.getElementById("inc-b")?.value;
   if(!a||!b||a===b)return;
-  // Avoid duplicates
   const already=incompatible.some(ic=>(ic.personA===a&&ic.personB===b)||(ic.personA===b&&ic.personB===a));
   if(already)return;
   incompatible.push({personA:a,personB:b});
-  render();
+  saveRota();render();
 }
-function removeIncompatible(i){incompatible.splice(i,1);render();}
+function removeIncompatible(i){incompatible.splice(i,1);saveRota();render();}
 
 function doGenerate(){
   rota=generateRota();
@@ -1258,7 +1391,8 @@ function saveToHistory(){
   if(!rota)return;
   const now=new Date();
   const label=rotaWeek?`Week of ${weekLabel(rotaWeek)}`:`Week of ${new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}`;
-  history.push({label,date:now.toISOString(),assignments:buildAssignments(rota),security:rota.Security,laundry:rota.Laundry});
+  // Save the full rota (days + Security + Laundry) so we know who did what on which day
+  history.push({label,date:now.toISOString(),rota:{days:rota.days,Security:rota.Security,Laundry:rota.Laundry}});
   saveHistory();
   alert(`✓ Saved! ${history.length} week${history.length!==1?"s":""} in history.`);
   renderBadge();
